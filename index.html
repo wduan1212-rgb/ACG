@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ACG 市场部内容创作工具</title>
+  <style>
+    :root{color-scheme:light;--brand:#2a6cf6;--cyan:#14c4d6;--violet:#7c6bff;--ink:#101828;--muted:#667085;--line:#e6ebf2;--soft:#f5f8ff;--card:#fff}
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);background:radial-gradient(900px 420px at 0 -10%,rgba(42,108,246,.14),transparent 60%),radial-gradient(760px 400px at 100% 0,rgba(20,196,214,.12),transparent 55%),#f4f7fc;min-height:100vh}.shell{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.rail{border-right:1px solid var(--line);background:rgba(255,255,255,.78);backdrop-filter:blur(18px);padding:24px 18px;display:flex;flex-direction:column;gap:18px}.brand{display:flex;align-items:center;gap:12px}.logo{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,var(--brand),var(--violet));display:grid;place-items:center;color:white;font-weight:900;box-shadow:0 12px 28px rgba(42,108,246,.28)}.brand strong{display:block;font-size:16px}.brand span,.muted{color:var(--muted);font-size:12px}.btn{border:0;border-radius:12px;padding:12px 16px;background:linear-gradient(135deg,var(--brand),#4b8dff);color:#fff;font-weight:750;box-shadow:0 10px 24px rgba(42,108,246,.25);cursor:pointer}.nav{display:grid;gap:8px}.nav button{border:1px solid var(--line);background:#fff;border-radius:11px;padding:11px 12px;text-align:left;color:#344054;font-weight:650;cursor:pointer}.nav button.active{border-color:#8db5ff;background:#eef4ff;color:#1b4fd8}.main{padding:28px;overflow:auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:26px}.eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#98a2b3;font-weight:800}.top h1{font-size:28px;margin:5px 0 0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:22px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 8px 26px rgba(16,24,40,.06)}.card h2{font-size:17px;margin:0 0 8px}.num{font-size:30px;font-weight:850;margin-top:8px}.flow{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px}.step{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;min-height:130px}.step b{display:block;margin-bottom:8px}.pill{display:inline-flex;padding:5px 9px;border-radius:999px;background:#eef4ff;color:#1b4fd8;font-size:12px;font-weight:750}.workspace{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}.list{display:grid;gap:10px}.item{border:1px solid var(--line);border-radius:14px;padding:13px;background:#fff;display:flex;justify-content:space-between;gap:12px}.notice{margin-top:18px;border:1px solid #fedf89;background:#fffaeb;color:#7a4b00;border-radius:14px;padding:14px;line-height:1.7;font-size:13px}@media(max-width:900px){.shell{grid-template-columns:1fr}.rail{position:static}.grid,.workspace,.flow{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand"><div class="logo">ACG</div><div><strong>ACG 市场部</strong><span>内容创作工具</span></div></div>
+      <button class="btn" id="createBtn">+ 创建账号</button>
+      <div class="nav">
+        <button class="active" data-view="home">平台首页</button>
+        <button data-view="script">脚本生成</button>
+        <button data-view="prompt">提示词工作台</button>
+        <button data-view="asset">供应商素材库</button>
+        <button data-view="settings">API 配置</button>
+      </div>
+      <p class="muted">静态 Pages 版本已发布。完整工程包已在本地整理，可在 Git 凭据可用后推送完整源码。</p>
+    </aside>
+    <main class="main">
+      <header class="top"><div><div class="eyebrow">账号化 AI 内容生产工作台</div><h1 id="title">平台首页</h1></div><button class="btn" id="publishBtn">模拟发布</button></header>
+      <section id="home" class="view">
+        <div class="grid"><div class="card"><h2>视频账号</h2><p class="muted">脚本、分镜、生成、粗剪</p><div class="num">2</div></div><div class="card"><h2>图文账号</h2><p class="muted">脚本、图片提示词、发布文案</p><div class="num">1</div></div><div class="card"><h2>本月产出</h2><p class="muted">样例账号统计</p><div class="num">24</div></div></div>
+        <div class="card"><div class="eyebrow">创作链路</div><div class="flow"><div class="step"><span class="pill">Step 1</span><b>脚本生成</b><p class="muted">按账号定位生成分镜脚本。</p></div><div class="step"><span class="pill">Step 2</span><b>分镜图</b><p class="muted">生成首帧和角色参考。</p></div><div class="step"><span class="pill">Step 3</span><b>提示词</b><p class="muted">拆分视频/图片提示词。</p></div><div class="step"><span class="pill">Step 4</span><b>生成工作台</b><p class="muted">对接即梦/Seedance/千帆。</p></div><div class="step"><span class="pill">Step 5</span><b>粗剪发布</b><p class="muted">导出素材供供应商下载。</p></div></div></div>
+      </section>
+      <section id="script" class="view" hidden><div class="workspace"><div class="card"><h2>脚本生成</h2><textarea id="topic" style="width:100%;height:150px;border:1px solid var(--line);border-radius:12px;padding:12px" placeholder="输入选题，例如：下班前自动生成日报"></textarea><br><br><button class="btn" id="genScript">生成样例脚本</button></div><div class="card"><h2>输出</h2><pre id="scriptOut" style="white-space:pre-wrap;line-height:1.7;color:#344054"></pre></div></div></section>
+      <section id="prompt" class="view" hidden><div class="card"><h2>提示词工作台</h2><div class="list" id="promptList"></div></div></section>
+      <section id="asset" class="view" hidden><div class="card"><h2>供应商素材库</h2><div class="list"><div class="item"><span>Dumate 一键整理文件夹_视频号_001.mp4</span><b>可下载</b></div><div class="item"><span>合同信息提取_小红书图文_006.zip</span><b>可下载</b></div><div class="item"><span>自动日报案例_视频号_012.mp4</span><b>已下载</b></div></div></div></section>
+      <section id="settings" class="view" hidden><div class="card"><h2>API 配置</h2><p class="muted">公开 Pages 不内置任何 API Key。真实模型调用请通过后端环境变量或页面运行时配置接入。</p><div class="notice">安全处理：已移除原型中的明文 Key，避免公开仓库泄露凭据。</div></div></section>
+      <div class="notice">当前页面用于先恢复 GitHub Pages 访问。完整高保真版本已在本地 `/tmp/acg-deploy` 整理完成，包含原始 `index.html / app.js / styles.css / server / cli / md文档`。</div>
+    </main>
+  </div>
+<script>
+const titles={home:'平台首页',script:'脚本生成',prompt:'提示词工作台',asset:'供应商素材库',settings:'API 配置'};
+document.querySelectorAll('.nav button').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');document.querySelectorAll('.view').forEach(v=>v.hidden=true);document.getElementById(btn.dataset.view).hidden=false;title.textContent=titles[btn.dataset.view]});
+createBtn.onclick=()=>alert('账号创建功能在完整原型中可用');publishBtn.onclick=()=>alert('已模拟发布到供应商素材库');
+genScript.onclick=()=>{const t=(topic.value||'下班前自动生成日报').trim();scriptOut.textContent=`标题：${t}\n\n0-3s：展示混乱任务列表，口播提出痛点。\n3-8s：打开 Dumate 输入一句需求。\n8-15s：Dumate 自动读取资料并整理结构。\n15-23s：生成可直接发送的日报/报告。\n23-30s：对比人工耗时，收束到办公效率价值。`;promptList.innerHTML=['首帧：干净办公桌面与 Dumate 工作台','镜头1：混乱文件夹变成清晰分类','镜头2：自动提取关键信息生成报告'].map(x=>`<div class="item"><span>${x}</span><button>复制</button></div>`).join('')};
+</script>
+</body>
+</html>
