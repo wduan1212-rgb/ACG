@@ -97,7 +97,7 @@ export function brandMark(height = 28) {
   </svg>`;
 }
 
-/* 方形小标（导航栏 / favicon 同款）：渐变描边播放三角 */
+/* 方形小标（导航栏 / favicon 同款）：深色圆角底 + 渐变描边播放三角 */
 export function brandGlyph(size = 28) {
   return `<svg viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true">
     <defs>
@@ -105,7 +105,8 @@ export function brandGlyph(size = 28) {
         <stop offset="0" stop-color="#B07CFF"/><stop offset="1" stop-color="#22A8E8"/>
       </linearGradient>
     </defs>
-    <path d="M15 10 L39.5 24 L15 38 Z" fill="none" stroke="url(#acgGl)" stroke-width="5.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <rect width="48" height="48" rx="11" fill="#0A0D18"/>
+    <path d="M16 11 L38.5 24 L16 37 Z" fill="none" stroke="url(#acgGl)" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
 }
 
