@@ -1,0 +1,615 @@
+/* Agent 工作台：独立沉浸式三栏工作区
+   会话列表 | 对话流（结构化卡片） | 任务看板（流水线可视化） */
+
+import { $, $$, esc, copyText, wireDropZone, timeAgo } from "../core/util.js";
+import { icon, agentAvatar } from "../ui/icons.js";
+import { state, save, on, productionById } from "../core/store.js";
+import { AI } from "../api/ai.js";
+import { toast, confirmModal, promptModal } from "../ui/components.js";
+import {
+  ensureSession, newSession, renameSession, deleteSession, addMsg, handleUserText, routeMediaFiles,
+  batchById, batchProds, activeBatches, currentSessionBatches, deleteBatch, removeProductionFromBatch,
+  matchAccounts, startBatch, startGeneration, approveAll, deliverAll, retryFailedIn,
+  FLOW_TEMPLATES, templatePlan
+} from "./orchestrator.js";
+import { renderMessage, boardRow } from "./cards.js";
+import { openProductionDrawer, approveProduction, rejectFlow, submitForReview } from "../views/prodDrawer.js";
+import { deliver } from "../domain/delivery.js";
+import { go } from "../core/router.js";
+
+let mounted = false;
+let rootEl = null;
+let thinking = false;
+let thinkSteps = [];       // 思考过程播报
+let heroSugs = null;       // AI/离线随机生成的灵感建议（每次进入都重新随机）
+let sugsBusy = false;
+
+const QUICK_ACTIONS = [
+  { t: "查看状态", text: "现在进度怎么样了" },
+  { t: "全部生成", text: "开始全部生成" },
+  { t: "全部交付", text: "全部交付" }
+];
+
+async function loadSugs(force = false) {
+  if (sugsBusy || (heroSugs && !force)) return;
+  sugsBusy = true;
+  try { heroSugs = await AI.suggestGoals({ accounts: state.accounts }); }
+  catch (e) { /* 离线兜底已在 AI 内部处理 */ }
+  finally { sugsBusy = false; }
+  if (isLive()) renderMsgs();
+}
+
+export const agentView = {
+  render(root) {
+    rootEl = root;
+    const s = ensureSession();
+    root.innerHTML = `
+      <div class="agent-shell">
+        <div class="agw-bg"><i></i><i></i><i></i></div>
+
+        <header class="agw-top">
+          <button class="agw-back" data-agw="exit">${icon("arrowLeft", 15)} 退出工作台</button>
+          <div class="agw-brand"><span class="agw-ava">${agentAvatar(26)}</span><b>批量创作</b><span class="agw-tag">Agent 总调度</span></div>
+          <div class="agw-phase" id="agwPhase"></div>
+          <div class="agw-top-right">
+            <label class="agw-auto" title="开启后：回传齐自动渲染、渲染完自动进审核">
+              <input type="checkbox" id="agwAuto" ${state.ui.autoAdvance !== false ? "checked" : ""} />
+              <i></i><span>自动推进</span>
+            </label>
+            <button class="agw-board-toggle" data-agw="board">${icon("kanban", 15)} 看板</button>
+          </div>
+        </header>
+
+        <div class="agw-body">
+          <aside class="agw-sessions" id="agwSessions"></aside>
+
+          <main class="agw-conv">
+            <div class="agw-msgs" id="agwMsgs"></div>
+            <div class="agw-composer" id="agwComposer">
+              <div class="agc-quick" id="agwQuick">${QUICK_ACTIONS.map((q, i) => `<button class="chip" data-quick="${i}">${esc(q.t)}</button>`).join("")}</div>
+              <div class="agw-input-card">
+                <textarea id="agwInput" rows="1" placeholder="一句话下达目标，或直接拖图回传…（Enter 发送 / Shift+Enter 换行）"></textarea>
+                <div class="agw-input-tools">
+                  <label class="icon-btn ghost" title="上传回传图片">
+                    ${icon("upload", 16)}<input type="file" accept="image/*,video/*" multiple hidden id="agwUpload" />
+                  </label>
+                  <button class="agw-send" id="agwSend" title="发送">${icon("send", 16)}</button>
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <aside class="agw-board" id="agwBoard"></aside>
+        </div>
+      </div>`;
+
+    renderSessions();
+    renderMsgs(true);
+    renderBoard();
+    renderPhase();
+    wire(root);
+
+    if (!mounted) {
+      mounted = true;
+      on("agent:msg", () => isLive() && (renderMsgs(true), renderSessions()));
+      on("agent:session", () => isLive() && (renderSessions(), renderMsgs(true)));
+      on("agent:thinking", v => { thinking = v; if (!v) setTimeout(() => { thinkSteps = []; }, 400); else thinkSteps = []; isLive() && renderThinking(); });
+      on("agent:think", step => { thinkSteps.push(step); isLive() && renderThinking(); });
+      on("batch:update", () => schedule(true));
+      on("job:update", () => schedule(false));
+      on("production:update", () => schedule(true));
+      on("change", () => schedule(false, true));
+    }
+  }
+};
+
+const isLive = () => document.body.dataset.zone === "agent" && rootEl && rootEl.isConnected;
+
+/* 高频事件用 rAF 合并，避免一帧内多次重建导致闪烁 */
+let _raf = 0, _needCards = false, _needBoard = false;
+function schedule(cards = false, phaseOnly = false) {
+  if (!isLive()) return;
+  if (cards) _needCards = true;
+  if (!phaseOnly) _needBoard = true;
+  if (_raf) return;
+  _raf = requestAnimationFrame(() => {
+    _raf = 0;
+    if (!isLive()) return;
+    if (_needCards) refreshLiveCards();
+    if (_needBoard) renderBoard();
+    renderPhase();
+    _needCards = _needBoard = false;
+  });
+}
+
+/* ---------- 子区渲染 ---------- */
+function renderSessions() {
+  const el = $("#agwSessions"); if (!el) return;
+  el.innerHTML = `
+    <button class="agw-new" data-agw="new-session">${icon("plus", 14)} 新会话</button>
+    <div class="agw-slist">${state.sessions.map(s => {
+      const last = s.messages[s.messages.length - 1];
+      const hasActive = state.batches.some(b => b.sessionId === s.id && b.phase !== "done");
+      return `<div class="agw-sitem ${s.id === state.ui.activeSessionId ? "is-active" : ""}" data-session="${s.id}" role="button" tabindex="0">
+        <b>${esc(s.title)}</b>
+        <em>${last ? esc(textOf(last)).slice(0, 26) : "空会话"}</em>
+        <span class="agw-stime">${hasActive ? `<i class="live-dot"></i>` : ""}${timeAgo(s.createdAt)}</span>
+        <span class="agw-sacts">
+          <button class="sact" data-srename="${s.id}" title="重命名">${icon("edit", 12)}</button>
+          <button class="sact danger" data-sdel="${s.id}" title="删除会话">${icon("trash", 12)}</button>
+        </span>
+      </div>`;
+    }).join("")}</div>`;
+}
+
+function textOf(m) {
+  if (m.type === "text") return m.payload.text || "";
+  return { plan: "📋 量产计划", progress: "⏱ 批次进度", need_input: "📥 等待回传", approval: "👁 审核请求", results: "✅ 批次完成", error: "⚠ 失败报告" }[m.type] || "";
+}
+
+function renderMsgs(scroll = false) {
+  const el = $("#agwMsgs"); if (!el) return;
+  const s = ensureSession();
+  if (!s.messages.length) {
+    loadSugs();
+    el.innerHTML = `
+      <div class="agw-hero">
+        <span class="agw-hero-avatar">${agentAvatar(60)}</span>
+        <h2>把一批内容交给我</h2>
+        <p>固定流程一键发起，或一句话自由下达。我来：<b>选号 → 批量起草 → 渲染 → 智能剪辑 → 请你审核 → 交付入库</b>。<br/>中途关页面也没关系，回来我会接着推进。</p>
+        <div class="agw-tpls">
+          ${Object.entries(FLOW_TEMPLATES).map(([k, t]) => `
+            <button class="agw-tpl" data-tpl="${k}">
+              <span class="tpl-ico">${icon(t.icon, 18)}</span>
+              <b>${esc(t.label)}</b>
+              <em>${esc(t.desc)}</em>
+              <span class="tpl-go">发起 ${icon("arrowRight", 12)}</span>
+            </button>`).join("")}
+        </div>
+        <div class="agw-sugs-head">
+          <span>${icon("dice", 13)} 随机灵感 <em>${sugsBusy ? "AI 正在按账号矩阵想新点子…" : "按账号矩阵随机生成"}</em></span>
+          <button class="link-btn" data-sug-refresh ${sugsBusy ? "disabled" : ""}>${icon("refresh", 12)} 换一批</button>
+        </div>
+        <div class="agw-hero-sugs">
+          ${(heroSugs || ["给全部账号做一期「把乱文件夹一键归类」", "给图文组来一批「下班前自动生成日报」", "给素材号全自动出一批「合同关键信息提取」"])
+          .map(t => `<button class="agw-sug" data-sug="${esc(t)}">${esc(t)} ${icon("arrowRight", 13)}</button>`).join("")}
+        </div>
+      </div>`;
+    return;
+  }
+  el.innerHTML = s.messages.map(renderMessage).join("") + `<div id="agwThinking"></div>`;
+  renderThinking();
+  wireDrops();
+  if (scroll) el.scrollTop = el.scrollHeight;
+}
+
+function thinkStepsHtml() {
+  const steps = thinkSteps.slice(-4);
+  return steps.map((s, i) => `<div class="think-step ${i === steps.length - 1 ? "cur" : "done"}">${i === steps.length - 1 ? `<span class="ts-dot spin"></span>` : icon("check", 11, "ok")}<span>${esc(s)}</span></div>`).join("")
+    || `<div class="think-step cur"><span class="ts-dot spin"></span><span>整理思路…</span></div>`;
+}
+function thinkProgHtml() {
+  const bs = currentSessionBatches().filter(b => b.phase !== "done");
+  if (!bs.length) return "";
+  const all = bs.flatMap(b => batchProds(b));
+  const done = all.filter(p => p.stage === "delivered").length;
+  const pct = all.length ? Math.round(done / all.length * 100) : 0;
+  return `<div class="think-prog"><span>批次进度 ${done}/${all.length}</span><i><b style="width:${pct}%"></b></i></div>`;
+}
+function renderThinking() {
+  const t = $("#agwThinking"); if (!t) return;
+  if (!thinking) { t.innerHTML = ""; return; }
+  // 已存在面板：只就地更新步骤/进度，避免整块重渲染导致动效重启「一跳一跳」
+  const panel = t.querySelector(".think-panel");
+  if (panel) {
+    const stepsEl = panel.querySelector(".think-steps");
+    if (stepsEl) stepsEl.innerHTML = thinkStepsHtml();
+    let progEl = panel.querySelector(".think-prog");
+    const progHtml = thinkProgHtml();
+    if (progHtml) { if (progEl) progEl.outerHTML = progHtml; else panel.insertAdjacentHTML("beforeend", progHtml); }
+    else if (progEl) progEl.remove();
+    return;
+  }
+  // 首次创建
+  t.innerHTML = `<div class="ag-row agent">
+    <span class="ag-avatar thinking">${agentAvatar(30)}</span>
+    <div class="think-panel">
+      <div class="think-head"><span class="think-orb"><i></i><i></i><i></i></span><b>思考中</b></div>
+      <div class="think-steps">${thinkStepsHtml()}</div>
+      ${thinkProgHtml()}
+    </div>
+  </div>`;
+  const el = $("#agwMsgs"); if (el) el.scrollTop = el.scrollHeight;
+}
+
+/* 活卡片就地刷新（不打断滚动/输入） */
+const PHASE_LABEL = { drafting: "批量起草中", awaiting_input: "等待回传", generating: "渲染中", review: "待审核", done: "已完成" };
+/* 进度卡就地更新（只改进度条宽度与分段计数），避免整卡换节点导致闪烁跳跃 */
+function updateProgressCard(node, b) {
+  const prods = batchProds(b);
+  const c = { draft: 0, wait: 0, gen: 0, review: 0, done: 0, fail: 0 };
+  prods.forEach(p => {
+    if (p.stageStatus === "failed") c.fail++;
+    else if (p.stage === "delivered") c.done++;
+    else if (p.stage === "review") c.review++;
+    else if (p.stage === "render" || p.stage === "workshop") c.gen++;
+    else if (p.stageStatus === "needs_input") c.wait++;
+    else c.draft++;
+  });
+  const pct = prods.length ? Math.round(c.done / prods.length * 100) : 0;
+  const bar = node.querySelector(".agp-bar i"); if (bar) bar.style.width = pct + "%";
+  const st = node.querySelector(".agc-state"); if (st) st.textContent = PHASE_LABEL[b.phase] || b.phase;
+  const segs = node.querySelector(".agp-segs");
+  if (segs) {
+    const seg = (label, n, cls) => n ? `<span class="agp-seg ${cls}"><b>${n}</b>${label}</span>` : "";
+    segs.innerHTML = seg("起草", c.draft, "draft") + seg("待回传", c.wait, "wait") + seg("渲染", c.gen, "gen") + seg("待审", c.review, "review") + seg("已交付", c.done, "done") + seg("失败", c.fail, "fail");
+  }
+}
+function refreshLiveCards() {
+  const s = ensureSession();
+  $$('#agwMsgs [data-mid]').forEach(node => {
+    // 进度卡就地更新，不换节点（避免进度条/动画重启的闪烁）
+    if (node.dataset.mtype === "progress") {
+      const card = node.querySelector("[data-batch]");
+      const b = card && batchById(card.dataset.batch);
+      if (b) updateProgressCard(node, b);
+      return;
+    }
+    if (!node.querySelector("[data-live]") && node.dataset.mtype !== "approval" && node.dataset.mtype !== "need_input") return;
+    const m = s.messages.find(x => x.id === node.dataset.mid);
+    if (!m) return;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = renderMessage(m);
+    node.replaceWith(tmp.firstElementChild);
+  });
+  wireDrops();
+}
+
+function renderBoard() {
+  const el = $("#agwBoard"); if (!el) return;
+  // 任务看板按当前会话独立
+  const groups = currentSessionBatches();
+  const total = groups.reduce((s, b) => s + (b.productionIds || []).length, 0);
+  if (!groups.length) {
+    el.innerHTML = `<div class="agw-board-head"><b>任务看板</b><em>本会话</em></div>
+      <div class="agw-board-empty">${icon("kanban", 22)}<p>本会话发起量产后，每条任务的流水线出现在这里。阶段圆点实时点亮，点任务看详情，拖图直接回传。</p></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="agw-board-head"><b>任务看板</b><em>本会话 · ${total} 条</em></div>` +
+    groups.map(b => {
+      const prods = batchProds(b);
+      const done = prods.filter(p => p.stage === "delivered").length;
+      const PH = { drafting: "起草", awaiting_input: "待回传", generating: "生成", review: "待审", done: "完成" };
+      return `<div class="mb-group">
+        <div class="mb-ghead">
+          <b>${esc(b.topic)}</b>
+          <span class="mb-gstat">${PH[b.phase] || b.phase} · ${done}/${prods.length}</span>
+          <button class="mb-gdel" data-batchdel="${b.id}" title="删除整批">${icon("trash", 12)}</button>
+        </div>
+        ${prods.map(boardRow).join("")}
+      </div>`;
+    }).join("");
+  // 删除整批任务
+  $$("#agwBoard [data-batchdel]").forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
+    const batch = batchById(b.dataset.batchdel);
+    if (!batch) return;
+    const ok = await confirmModal({ title: `删除这一批任务？`, body: `「${batch.topic}」共 ${(batch.productionIds || []).length} 条，连同其在制产物一并移除（已交付的保留）。`, danger: true, okText: "删除" });
+    if (ok) { deleteBatch(batch.id); renderBoard(); renderPhase(); }
+  }));
+  // 删除单条任务
+  $$("#agwBoard [data-proddel]").forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
+    const p = productionById(b.dataset.proddel);
+    if (!p) return;
+    const ok = await confirmModal({ title: `删除任务「${p.title || p.topic || "未命名"}」？`, danger: true, okText: "删除" });
+    if (ok) { removeProductionFromBatch(p.id); renderBoard(); renderPhase(); refreshLiveCards(); }
+  }));
+  // 看板行拖拽回传
+  $$("#agwBoard [data-dropprod]").forEach(row => {
+    wireDropZone(row, async files => {
+      const p = productionById(row.dataset.dropprod);
+      if (!p) return;
+      const r = await routeFilesToProduction(p, files);
+      if (r) toast(`已回传 ${r} 张到「${p.title || p.topic}」`);
+    });
+  });
+}
+
+async function routeFilesToProduction(p, files) {
+  const { fileToDataUrl } = await import("../core/util.js");
+  const { addAssetFromDataUrl } = await import("../domain/assets.js");
+  const { maybeAdvanceAfterInput } = await import("./orchestrator.js");
+  const isImg = p.mode === "图文";
+  const items = isImg ? p.artifacts.images.items : p.artifacts.boards.items;
+  let n = 0;
+  for (const f of Array.from(files).filter(x => x.type.startsWith("image/"))) {
+    const i = items.findIndex(x => !x.assetId);
+    if (i < 0) break;
+    const dataUrl = await fileToDataUrl(f);
+    const a = await addAssetFromDataUrl(p.accountId, { name: `${isImg ? "笔记图" : "分镜图"}${String(i + 1).padStart(2, "0")}_${(p.title || "").slice(0, 6)}`, tags: [isImg ? "笔记图" : "分镜图", "Agent回传"], dataUrl });
+    items[i].assetId = a.id; items[i].status = "done"; n++;
+  }
+  if (n) {
+    save("productions");
+    if (items.every(x => x.assetId)) maybeAdvanceAfterInput(p);
+  }
+  return n;
+}
+
+function renderPhase() {
+  const el = $("#agwPhase"); if (!el) return;
+  const bs = currentSessionBatches().filter(b => b.phase !== "done");
+  if (!bs.length) { el.innerHTML = `<span class="agw-idle">空闲 · 等待新目标</span>`; return; }
+  const c = { draft: 0, wait: 0, gen: 0, review: 0, done: 0, fail: 0 };
+  bs.forEach(b => batchProds(b).forEach(p => {
+    if (p.stageStatus === "failed") c.fail++;
+    else if (p.stage === "delivered") c.done++;
+    else if (p.stage === "review") c.review++;
+    else if (p.stage === "render" || p.stage === "workshop") c.gen++;
+    else if (p.stageStatus === "needs_input") c.wait++;
+    else c.draft++;
+  }));
+  const chip = (label, n, cls) => n ? `<span class="phase-chip ${cls}">${label} ${n}</span>` : "";
+  el.innerHTML = chip("起草", c.draft, "draft") + chip("待回传", c.wait, "wait") + chip("渲染", c.gen, "gen") + chip("待审", c.review, "review") + chip("失败", c.fail, "fail") + chip("已交付", c.done, "done");
+}
+
+/* ---------- 事件 ---------- */
+function wire(root) {
+  // 委托监听挂到每次重建的 .agent-shell 上（而非持久的 #viewRoot），避免多次进入后监听器叠加
+  const shell = root.querySelector(".agent-shell") || root;
+  const input = $("#agwInput", root);
+  const fit = () => { input.style.height = "auto"; input.style.height = Math.min(140, input.scrollHeight) + "px"; };
+  input.addEventListener("input", fit);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  input.addEventListener("paste", async e => {
+    const items = Array.from(e.clipboardData.items).filter(i => i.type.startsWith("image/"));
+    if (items.length) {
+      e.preventDefault();
+      const r = await routeMediaFiles(items.map(i => i.getAsFile()));
+      reportRoute(r);
+    }
+  });
+  $("#agwSend", root).addEventListener("click", send);
+  $("#agwUpload", root).addEventListener("change", async e => {
+    const r = await routeMediaFiles(e.target.files);
+    reportRoute(r);
+    e.target.value = "";
+  });
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = ""; fit();
+    await handleUserText(text);
+  }
+
+  // composer 整体可拖图
+  wireDropZone($("#agwComposer", root), async files => {
+    const r = await routeMediaFiles(files);
+    reportRoute(r);
+  });
+
+  $("#agwAuto", root).addEventListener("change", e => {
+    state.ui.autoAdvance = e.target.checked;
+    currentSessionBatches().forEach(b => { b.autoAdvance = e.target.checked; });
+    save("meta", "batches");
+    toast(e.target.checked ? "已开启自动推进：回传齐自动渲染、完成自动进审核" : "已关闭自动推进：每个关口都会等你确认");
+  });
+
+  // 全局委托
+  shell.addEventListener("click", async e => {
+    const exit = e.target.closest('[data-agw="exit"]');
+    if (exit) { go("overview"); return; }
+    if (e.target.closest('[data-agw="new-session"]')) { newSession(); return; }
+    if (e.target.closest('[data-agw="board"]')) { root.querySelector(".agent-shell").classList.toggle("board-hidden"); return; }
+
+    // 会话重命名 / 删除（先于会话切换判断）
+    const srn = e.target.closest("[data-srename]");
+    if (srn) {
+      const s2 = state.sessions.find(x => x.id === srn.dataset.srename);
+      const name = await promptModal({ title: "重命名会话", value: s2?.title || "", placeholder: "会话名称" });
+      if (name) renameSession(srn.dataset.srename, name);
+      return;
+    }
+    const sdl = e.target.closest("[data-sdel]");
+    if (sdl) {
+      const ok = await confirmModal({ title: "删除这个会话？", body: "对话记录会被删除；批次与任务数据保留，可在看板/单号创作里继续查看。", danger: true, okText: "删除" });
+      if (ok) { deleteSession(sdl.dataset.sdel); renderSessions(); renderMsgs(true); }
+      return;
+    }
+
+    const sess = e.target.closest("[data-session]");
+    if (sess) { state.ui.activeSessionId = sess.dataset.session; save("meta"); renderSessions(); renderMsgs(true); return; }
+
+    // 固定流程模板：一键生成计划卡（每号随机主题）
+    const tpl = e.target.closest("[data-tpl]");
+    if (tpl) {
+      const plan = templatePlan(tpl.dataset.tpl);
+      if (!plan) return;
+      if (!plan.accountIds.length) { toast("该分组下还没有账号"); return; }
+      const s3 = ensureSession();
+      addMsg(s3, { role: "user", type: "text", payload: { text: plan.goal } });
+      addMsg(s3, { role: "agent", type: "plan", payload: { status: "pending", ...plan } });
+      return;
+    }
+    if (e.target.closest("[data-sug-refresh]")) { heroSugs = null; loadSugs(true); renderMsgs(); return; }
+
+    const sug = e.target.closest("[data-sug]");
+    if (sug) { input.value = sug.dataset.sug; fit(); input.focus(); return; }
+    const quick = e.target.closest("[data-quick]");
+    if (quick) { input.value = QUICK_ACTIONS[+quick.dataset.quick].text; fit(); input.focus(); return; }
+
+    const act = e.target.closest("[data-act]");
+    if (!act) return;
+    const pid = act.dataset.pid;
+    const p = pid ? productionById(pid) : null;
+    const batch = act.dataset.batch ? batchById(act.dataset.batch) : null;
+    const s = ensureSession();
+
+    switch (act.dataset.act) {
+      case "plan-confirm": {
+        const m = s.messages.find(x => x.id === act.dataset.mid);
+        if (!m || m.payload.status !== "pending") return;
+        if (m.payload.topicMode !== "random" && !(m.payload.topic || "").trim()) { toast("先填写主题，或切换为每号随机"); return; }
+        if (!m.payload.accountIds.length) { toast("至少选择一个账号"); return; }
+        m.payload.status = "confirmed";
+        save("sessions");
+        renderMsgs(true);
+        await startBatch({ ...m.payload, goal: m.payload.goal }, s);
+        break;
+      }
+      case "plan-cancel": {
+        const m = s.messages.find(x => x.id === act.dataset.mid);
+        if (m) { m.payload.status = "cancelled"; save("sessions"); renderMsgs(); }
+        break;
+      }
+      case "plan-topicmode": {
+        const m = s.messages.find(x => x.id === act.dataset.mid);
+        if (!m || m.payload.status !== "pending") break;
+        m.payload.topicMode = m.payload.topicMode === "random" ? "fixed" : "random";
+        save("sessions");
+        renderMsgs();
+        break;
+      }
+      case "plan-refclear": {
+        const m = s.messages.find(x => x.id === act.dataset.mid);
+        if (m) { m.payload.sharedRefAssetId = null; save("sessions"); refreshLiveCards(); }
+        break;
+      }
+      case "copy-external": {
+        if (!p) return;
+        const txt = p.mode === "图文" ? p.artifacts.images.externalPrompt : p.artifacts.boards.externalPrompt;
+        copyText(txt || "", "已复制整段提示词，去第三方模型粘贴即可");
+        break;
+      }
+      case "open-prod": if (p) openProductionDrawer(p.id); break;
+      case "batch-generate": if (batch) { const n = startGeneration(batch); toast(n ? `已派发 ${n} 个渲染任务` : "没有就绪任务"); } break;
+      case "batch-retry": if (batch) { const n = retryFailedIn(batch); toast(n ? `正在重试 ${n} 个失败任务` : "没有失败任务"); } break;
+      case "batch-approve-all": if (batch) { const n = approveAll(batch); toast(`已通过 ${n} 条`); refreshLiveCards(); } break;
+      case "batch-submit-all": {
+        if (!batch) break;
+        let n = 0;
+        batchProds(batch).forEach(x => { if (x.stage === "review" && x.review.state !== "submitted") { submitForReview(x); n++; } });
+        toast(n ? `已提交 ${n} 条审核，等待审核员处理` : "没有可提交的内容");
+        refreshLiveCards();
+        break;
+      }
+      case "batch-deliver-all": {
+        if (!batch) break;
+        const cnt = batchProds(batch).filter(x => x.stage === "review").length;
+        const ok = await confirmModal({ title: `通过并交付本批 ${cnt} 条内容？`, body: "未通过的会先自动通过，全部定稿入供应商端。", okText: "全部交付" });
+        if (ok) { approveAll(batch); const n = deliverAll(batch); toast(`已交付 ${n} 条入库`); }
+        break;
+      }
+      case "prod-submit": if (p) { submitForReview(p); refreshLiveCards(); } break;
+      case "prod-approve": if (p) { approveProduction(p); refreshLiveCards(); } break;
+      case "prod-approve-deliver": {
+        if (!p) break;
+        const ok = await confirmModal({ title: `通过并交付「${p.artifacts.copy.title || p.title}」？`, body: "审核通过后定稿入供应商端。", okText: "通过并交付" });
+        if (ok) { approveProduction(p); deliver(p); toast("已通过并交付"); refreshLiveCards(); }
+        break;
+      }
+      case "prod-reject": if (p) { await rejectFlow(p); refreshLiveCards(); } break;
+      case "prod-deliver": {
+        if (!p) break;
+        const ok = await confirmModal({ title: `交付「${p.artifacts.copy.title || p.title}」？`, body: "定稿入供应商端，可见可下载。", okText: "交付入库" });
+        if (ok) { deliver(p); toast("已交付入库"); }
+        break;
+      }
+    }
+  });
+
+  // 需输入卡的文件选择 + 计划卡统一参考图上传
+  shell.addEventListener("change", async e => {
+    const inp = e.target.closest("[data-agdrop-input]");
+    if (inp && inp.files.length) {
+      const r = await routeMediaFiles(inp.files);
+      reportRoute(r);
+      inp.value = "";
+      return;
+    }
+    const ref = e.target.closest("[data-plan-ref]");
+    if (ref && ref.files[0]) { await setPlanRef(ref.dataset.planRef, ref.files[0]); ref.value = ""; }
+  });
+
+  // 计划卡编辑
+  shell.addEventListener("input", e => {
+    const f = e.target.closest("[data-pf]");
+    if (!f) return;
+    const node = e.target.closest("[data-plan]");
+    const s = ensureSession();
+    const m = s.messages.find(x => x.id === node.dataset.plan);
+    if (m) { m.payload[f.dataset.pf] = f.value; save("sessions"); }
+  });
+  shell.addEventListener("click", e => {
+    const tagBtn = e.target.closest("[data-ptag]");
+    const accBtn = e.target.closest("[data-pacc]");
+    if (!tagBtn && !accBtn) return;
+    const node = e.target.closest("[data-plan]");
+    if (!node) return;
+    const s = ensureSession();
+    const m = s.messages.find(x => x.id === node.dataset.plan);
+    if (!m || m.payload.status !== "pending") return;
+    if (tagBtn) {
+      const t = tagBtn.dataset.ptag;
+      const i = m.payload.tags.indexOf(t);
+      i >= 0 ? m.payload.tags.splice(i, 1) : m.payload.tags.push(t);
+      m.payload.accountIds = matchAccounts(m.payload).map(a => a.id);
+    } else {
+      const id = accBtn.dataset.pacc;
+      const i = m.payload.accountIds.indexOf(id);
+      i >= 0 ? m.payload.accountIds.splice(i, 1) : m.payload.accountIds.push(id);
+    }
+    save("sessions");
+    const tmp = document.createElement("div");
+    tmp.innerHTML = renderMessage(m);
+    node.closest("[data-mid]").replaceWith(tmp.firstElementChild);
+    wireDrops();
+  });
+
+  wireDrops();
+}
+
+async function setPlanRef(mid, file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const s = ensureSession();
+  const m = s.messages.find(x => x.id === mid);
+  if (!m || m.payload.status !== "pending") return;
+  const { fileToDataUrl } = await import("../core/util.js");
+  const { addAssetFromDataUrl } = await import("../domain/assets.js");
+  const acc0 = state.accounts.find(a => m.payload.accountIds.includes(a.id) && a.subType === "无数字人") || state.accounts.find(a => m.payload.accountIds.includes(a.id));
+  const dataUrl = await fileToDataUrl(file);
+  const a = await addAssetFromDataUrl(acc0?.id, { name: "批量统一参考图", tags: ["参考图", "统一参考"], dataUrl });
+  m.payload.sharedRefAssetId = a.id;
+  save("sessions");
+  refreshLiveCards();
+  toast("已设为本批统一参考图");
+}
+
+function wireDrops() {
+  $$("#agwMsgs [data-agdrop]").forEach(z => {
+    if (z.dataset.wired) return;
+    z.dataset.wired = "1";
+    wireDropZone(z, async files => {
+      const r = await routeMediaFiles(files);
+      reportRoute(r);
+    });
+    z.addEventListener("click", () => { const inp = z.querySelector("[data-agdrop-input]"); if (inp) inp.click(); });
+  });
+  // 计划卡统一参考图：支持拖入
+  $$("#agwMsgs [data-plan-refdrop]").forEach(z => {
+    if (z.dataset.wired) return;
+    z.dataset.wired = "1";
+    wireDropZone(z, files => setPlanRef(z.dataset.planRefdrop, Array.from(files).find(f => f.type.startsWith("image/"))), { filesOnly: true });
+  });
+}
+
+function reportRoute(r) {
+  if (!r) return;
+  if (r.assigned) toast(`已接收 ${r.assigned} 张图，分发到 ${r.tasks} 个任务${r.extra ? `（多出 ${r.extra} 张未分发）` : ""}`);
+  else if (r.videos) toast(`已登记 ${r.videos} 个视频素材入资产库`);
+  else toast("当前没有等待回传的任务，先发起一批量产");
+}
