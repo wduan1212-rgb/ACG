@@ -9,16 +9,17 @@ import { urlFor, thumbHtml, addAssetFromFile } from "../domain/assets.js";
 import { createJob, retryJob, cancelJob } from "../api/jobs.js";
 import { videoApiConfigured } from "../api/providers.js";
 import { toast } from "../ui/components.js";
-import { go } from "../core/router.js";
+import { go, currentRoute } from "../core/router.js";
 import { stepperHtml, wireStepper } from "./studio.js";
 
 const segIdxByProd = new Map();
 const draftBySeg = new Map(); // `${pid}:${seg}` -> html
 let wired = false;
-let liveRoot = null, liveProd = null;
+let liveRoot = null, liveProd = null, liveLight = null;
 
 export function renderRenderPage(root, p) {
   liveRoot = root; liveProd = p;
+  liveLight = () => renderRenderPageLight();
   const segs = segmentsForGen(p);
   if (!segs.length) {
     root.innerHTML = `${stepperHtml(p, "render")}
@@ -334,9 +335,12 @@ export function renderRenderPage(root, p) {
       if (!liveRoot || !liveRoot.isConnected) return;
       if (document.body.dataset.zone !== "studio") return;
       if (!liveProd || j.productionId !== liveProd.id) return;
+      // 已切到别的阶段页 / 别的任务：不刷新，避免打回生成台
+      if (currentRoute().page !== "render") return;
+      if (liveProd.id !== state.ui.activeProductionId) return;
       // 只更新流区域与左栏状态，避免打断输入
       const flowEl = liveRoot.querySelector("#wbFlow");
-      if (flowEl) renderRenderPageLight();
+      if (flowEl) (liveLight || renderRenderPageLight)();
     });
   }
 

@@ -60,9 +60,13 @@ export const studioView = {
 };
 
 /* ---------- 链路 stepper（链路页共用头部） ---------- */
+const RETURN_LABEL = { agent: "返回批量创作", delivery: "返回发布清单", overview: "返回首页", assets: "返回整体资产", drafts: "返回草稿箱", studio: "返回账号主页" };
+
 export function stepperHtml(p, currentPage) {
   const flow = flowOf(p);
+  const rt = state.ui.returnTo;
   return `<div class="chain-stepper">
+    ${rt ? `<button class="cs-back" data-cs-back>${icon("arrowLeft", 14)} ${RETURN_LABEL[rt.zone] || "返回"}</button>` : ""}
     ${flow.map((st, i) => {
       const done = stageDone(p, st);
       const cur = pageStage(currentPage) === st;
@@ -81,10 +85,17 @@ const stagePageName = st => st;
 
 export function wireStepper(root) {
   $$("[data-chain]", root).forEach(b => b.addEventListener("click", () => go("studio", b.dataset.chain)));
+  const back = $("[data-cs-back]", root);
+  if (back) back.addEventListener("click", () => {
+    const rt = state.ui.returnTo;
+    state.ui.returnTo = null; save("meta");
+    if (rt && rt.zone) go(rt.zone, rt.page); else history.back();
+  });
 }
 
 /* ---------- 账号主页 ---------- */
 function renderHome(root, acc) {
+  if (state.ui.returnTo) { state.ui.returnTo = null; save("meta"); }   // 到账号主页即清掉微调返回态
   const prods = productionsOf(acc.id);
   const inflight = prods.filter(p => p.stage !== "delivered");
   const delivered = prods.filter(p => p.stage === "delivered").slice(0, 6);
@@ -112,7 +123,7 @@ function renderHome(root, acc) {
       </header>
 
       <section class="sh-flow card">
-        <div class="card-head"><b>创作链路</b><em>${acc.mode === "图文" ? "脚本 → 成图（站外回传）→ 文案 → 审核 → 交付" : acc.subType === "无数字人" ? "脚本（含口播音频）→ 分镜工坊（一体节点）→ 智能混剪+BGM → 文案 → 审核 → 交付" : "脚本 → 分镜 → 提示词 → 生成 → 智能剪辑 → 文案 → 审核 → 交付"}</em></div>
+        <div class="card-head"><b>创作链路</b><em>${acc.mode === "图文" ? "脚本 → 成图（站外上传）→ 文案 → 审核 → 交付" : acc.subType === "无数字人" ? "脚本（含口播音频）→ 分镜工坊（一体节点）→ 智能混剪+BGM → 文案 → 审核 → 交付" : "脚本 → 分镜 → 提示词 → 生成 → 智能剪辑 → 文案 → 审核 → 交付"}</em></div>
         <div class="sh-flow-steps">
           ${flow.map((st, i) => `
             <button class="fs-card" data-sh-flow="${st}" style="--d:${i * 40}ms">

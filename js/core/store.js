@@ -21,24 +21,28 @@ export const state = {
     currentMemberId: null,    // 当前登录成员
     autoAdvance: true,
     collapsedGroups: [],
-    assetSeq: 0               // 全局上传素材编号计数器（按上传先后递增）
+    assetSeq: 0,              // 全局上传素材编号计数器（按上传先后递增）
+    deliverSeq: 0,            // 全局发布序号计数器（按定稿发布先后递增，供应商端共享排序）
+    returnTo: null            // 从看板/清单进工作台微调时的来处路由，给"返回"按钮用
   }
 };
 
-/* 权限：
-   admin    管账号/成员/设置 + 全部创作与审核
-   reviewer 审核员：可创作，且可审核（通过并交付入供应商端 / 驳回）
-   editor   创作成员：只走创作流程，只能"提交审核"，不能入供应商端
-   supplier 只进发布清单 */
-export const ROLE_LABEL = { admin: "管理员", reviewer: "审核员", editor: "创作成员", supplier: "供应商" };
+/* 权限（简化版，去掉审核员）：
+   admin    管账号/成员/设置 + 全部创作与发布；可在发布清单非强制标注「已审阅」+ 监管全量
+   editor   创作成员：走创作流程，且可直接定稿发布入供应商端（拥有发布权）
+   supplier 只进发布清单（下载素材 + 回传发布链接） */
+export const ROLE_LABEL = { admin: "管理员", editor: "创作成员", supplier: "供应商" };
 export const currentMember = () => state.members.find(m => m.id === state.ui.currentMemberId) || null;
 export const myId = () => state.ui.currentMemberId;
 export const canManageAccounts = () => state.role === "admin";
 export const canManageMembers = () => state.role === "admin";
-export const canCreate = () => state.role === "admin" || state.role === "reviewer" || state.role === "editor";
-export const canReview = () => state.role === "admin" || state.role === "reviewer";   // 审核 + 入供应商端
-/* 创作互不干扰：editor 只看自己；admin/reviewer 监管全看（需跨人审核）。旧数据无 owner 视为可见 */
-export const ownedBy = (item) => !item.ownerId || item.ownerId === state.ui.currentMemberId || canReview();
+export const canCreate = () => state.role === "admin" || state.role === "editor";
+export const canDeliver = () => state.role === "admin" || state.role === "editor";   // 创作者也有发布权
+export const canReview = canDeliver;                       // 兼容旧引用：现在"定稿"即由创作者自行完成
+export const canMarkReviewed = () => state.role === "admin";  // 仅管理员可标注「已审阅」（非强制门槛）
+export const canSeeAll = () => state.role === "admin";        // 仅管理员监管全量
+/* 创作互不干扰：editor 只看自己；admin 监管全看。旧数据无 owner 视为可见 */
+export const ownedBy = (item) => !item.ownerId || item.ownerId === state.ui.currentMemberId || canSeeAll();
 
 const listeners = {};
 export function on(evt, fn) { (listeners[evt] = listeners[evt] || []).push(fn); return () => off(evt, fn); }
@@ -94,17 +98,36 @@ export async function loadAll() {
   if (ui) Object.assign(state.ui, ui);
   state.role = (await db.metaGet("role")) || null;
   if (state.role === "studio") state.role = "admin"; // 旧身份迁移
-  // 种子成员（首次：一个管理员；保留旧三档作为示例成员）
+  if (state.role === "reviewer") state.role = "editor"; // 审核员已并入创作成员（含发布权）
+  // 历史成员里的 reviewer 统一迁移为 editor
+  let migrated = false;
+  state.members.forEach(m => { if (m.role === "reviewer") { m.role = "editor"; migrated = true; } });
+  if (migrated) db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
+  // 账号收敛 v2（一次性）：移除旧演示账号，落地正式账号 yuxuan(管理员) / gongyingshang(供应商)
+  if (!(await db.metaGet("acctsV2"))) {
+    const DEMO = new Set(["admin:admin888", "reviewer:888888", "editor:666666", "supplier:222222"]);
+    state.members = state.members.filter(m => !DEMO.has(m.username + ":" + m.pin));
+    if (!state.members.some(m => m.username === "yuxuan")) state.members.unshift({ id: uid(), name: "羽轩", username: "yuxuan", pin: "acg123", role: "admin", createdAt: Date.now() });
+    if (!state.members.some(m => m.username === "gongyingshang")) state.members.push({ id: uid(), name: "供应商", username: "gongyingshang", pin: "gys123", role: "supplier", createdAt: Date.now() });
+    db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
+    db.metaSet("acctsV2", true);
+  }
+  // 兜底：成员为空也要有一个管理员
   if (!state.members.length) {
-    state.members = [
-      { id: uid(), name: "管理员", username: "admin", pin: "admin888", role: "admin", createdAt: Date.now() },
-      { id: uid(), name: "审核员", username: "reviewer", pin: "888888", role: "reviewer", createdAt: Date.now() },
-      { id: uid(), name: "创作成员A", username: "editor", pin: "666666", role: "editor", createdAt: Date.now() },
-      { id: uid(), name: "供应商", username: "supplier", pin: "222222", role: "supplier", createdAt: Date.now() }
-    ];
+    state.members = [{ id: uid(), name: "羽轩", username: "yuxuan", pin: "acg123", role: "admin", createdAt: Date.now() }];
     db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
   }
   if (state.ui.assetSeq == null) state.ui.assetSeq = state.assets.filter(a => !a.delivered).length;
+  // 发布序号回填：历史已发布资产补 pubSeq（按发布/创建先后），让发布清单「序号」有意义
+  {
+    const delivered = state.assets.filter(a => a.delivered);
+    const need = delivered.filter(a => a.pubSeq == null)
+      .sort((a, b) => (a.deliveredAt || a.createdAt || 0) - (b.deliveredAt || b.createdAt || 0));
+    let seq = Math.max(state.ui.deliverSeq || 0, delivered.reduce((m, a) => Math.max(m, a.pubSeq || 0), 0));
+    need.forEach(a => { a.pubSeq = ++seq; if (!a.deliveredAt) a.deliveredAt = a.createdAt; if (!a.byAccount) { const ac = accountById(a.accountId); a.byAccount = ac ? ac.name : ""; } });
+    state.ui.deliverSeq = seq;
+    if (need.length) db.replaceAll("assets", JSON.parse(JSON.stringify(state.assets)));
+  }
   // 当前成员失效时清空（要求重新登录）
   if (state.ui.currentMemberId && !state.members.find(m => m.id === state.ui.currentMemberId)) {
     state.ui.currentMemberId = null; state.role = null;

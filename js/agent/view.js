@@ -5,15 +5,15 @@ import { $, $$, esc, copyText, wireDropZone, timeAgo } from "../core/util.js";
 import { icon, agentAvatar } from "../ui/icons.js";
 import { state, save, on, productionById } from "../core/store.js";
 import { AI } from "../api/ai.js";
-import { toast, confirmModal, promptModal } from "../ui/components.js";
+import { toast, confirmModal, promptModal, publishModal } from "../ui/components.js";
 import {
   ensureSession, newSession, renameSession, deleteSession, addMsg, handleUserText, routeMediaFiles,
   batchById, batchProds, activeBatches, currentSessionBatches, deleteBatch, removeProductionFromBatch,
-  matchAccounts, startBatch, startGeneration, approveAll, deliverAll, retryFailedIn,
+  matchAccounts, startBatch, startGeneration, deliverAll, retryFailedIn,
   FLOW_TEMPLATES, templatePlan
 } from "./orchestrator.js";
 import { renderMessage, boardRow } from "./cards.js";
-import { openProductionDrawer, approveProduction, rejectFlow, submitForReview } from "../views/prodDrawer.js";
+import { openProductionDrawer } from "../views/prodDrawer.js";
 import { deliver } from "../domain/delivery.js";
 import { go } from "../core/router.js";
 
@@ -52,7 +52,7 @@ export const agentView = {
           <div class="agw-brand"><span class="agw-ava">${agentAvatar(26)}</span><b>批量创作</b><span class="agw-tag">Agent 总调度</span></div>
           <div class="agw-phase" id="agwPhase"></div>
           <div class="agw-top-right">
-            <label class="agw-auto" title="开启后：回传齐自动渲染、渲染完自动进审核">
+            <label class="agw-auto" title="开启后：上传齐自动渲染、渲染完自动进入待发布">
               <input type="checkbox" id="agwAuto" ${state.ui.autoAdvance !== false ? "checked" : ""} />
               <i></i><span>自动推进</span>
             </label>
@@ -68,9 +68,9 @@ export const agentView = {
             <div class="agw-composer" id="agwComposer">
               <div class="agc-quick" id="agwQuick">${QUICK_ACTIONS.map((q, i) => `<button class="chip" data-quick="${i}">${esc(q.t)}</button>`).join("")}</div>
               <div class="agw-input-card">
-                <textarea id="agwInput" rows="1" placeholder="一句话下达目标，或直接拖图回传…（Enter 发送 / Shift+Enter 换行）"></textarea>
+                <textarea id="agwInput" rows="1" placeholder="一句话下达目标，或直接拖图上传…（Enter 发送 / Shift+Enter 换行）"></textarea>
                 <div class="agw-input-tools">
-                  <label class="icon-btn ghost" title="上传回传图片">
+                  <label class="icon-btn ghost" title="上传上传图片">
                     ${icon("upload", 16)}<input type="file" accept="image/*,video/*" multiple hidden id="agwUpload" />
                   </label>
                   <button class="agw-send" id="agwSend" title="发送">${icon("send", 16)}</button>
@@ -144,7 +144,7 @@ function renderSessions() {
 
 function textOf(m) {
   if (m.type === "text") return m.payload.text || "";
-  return { plan: "📋 量产计划", progress: "⏱ 批次进度", need_input: "📥 等待回传", approval: "👁 审核请求", results: "✅ 批次完成", error: "⚠ 失败报告" }[m.type] || "";
+  return { plan: "📋 量产计划", progress: "⏱ 批次进度", need_input: "📥 等待上传", approval: "👁 待发布", results: "✅ 批次完成", error: "⚠ 失败报告" }[m.type] || "";
 }
 
 function renderMsgs(scroll = false) {
@@ -156,7 +156,7 @@ function renderMsgs(scroll = false) {
       <div class="agw-hero">
         <span class="agw-hero-avatar">${agentAvatar(60)}</span>
         <h2>把一批内容交给我</h2>
-        <p>固定流程一键发起，或一句话自由下达。我来：<b>选号 → 批量起草 → 渲染 → 智能剪辑 → 请你审核 → 交付入库</b>。<br/>中途关页面也没关系，回来我会接着推进。</p>
+        <p>固定流程一键发起，或一句话自由下达。我来：<b>选号 → 批量起草 → 渲染 → 智能剪辑 → 你来定稿 → 发布入供应商端</b>。<br/>中途关页面也没关系，回来我会接着推进。</p>
         <div class="agw-tpls">
           ${Object.entries(FLOW_TEMPLATES).map(([k, t]) => `
             <button class="agw-tpl" data-tpl="${k}">
@@ -223,7 +223,7 @@ function renderThinking() {
 }
 
 /* 活卡片就地刷新（不打断滚动/输入） */
-const PHASE_LABEL = { drafting: "批量起草中", awaiting_input: "等待回传", generating: "渲染中", review: "待审核", done: "已完成" };
+const PHASE_LABEL = { drafting: "批量起草中", awaiting_input: "等待上传", generating: "渲染中", review: "待发布", done: "已完成" };
 /* 进度卡就地更新（只改进度条宽度与分段计数），避免整卡换节点导致闪烁跳跃 */
 function updateProgressCard(node, b) {
   const prods = batchProds(b);
@@ -242,7 +242,7 @@ function updateProgressCard(node, b) {
   const segs = node.querySelector(".agp-segs");
   if (segs) {
     const seg = (label, n, cls) => n ? `<span class="agp-seg ${cls}"><b>${n}</b>${label}</span>` : "";
-    segs.innerHTML = seg("起草", c.draft, "draft") + seg("待回传", c.wait, "wait") + seg("渲染", c.gen, "gen") + seg("待审", c.review, "review") + seg("已交付", c.done, "done") + seg("失败", c.fail, "fail");
+    segs.innerHTML = seg("起草", c.draft, "draft") + seg("待上传", c.wait, "wait") + seg("渲染", c.gen, "gen") + seg("待审", c.review, "review") + seg("已交付", c.done, "done") + seg("失败", c.fail, "fail");
   }
 }
 function refreshLiveCards() {
@@ -260,7 +260,12 @@ function refreshLiveCards() {
     if (!m) return;
     const tmp = document.createElement("div");
     tmp.innerHTML = renderMessage(m);
-    node.replaceWith(tmp.firstElementChild);
+    const fresh = tmp.firstElementChild;
+    if (!fresh) return;
+    // 内容没变就不替换（忽略 wireDrops 写入的 data-wired），避免拖拽区/动画频繁重建的「一跳一跳」
+    const norm = h => h.replace(/ data-wired="1"/g, "");
+    if (norm(fresh.outerHTML) === norm(node.outerHTML)) return;
+    node.replaceWith(fresh);
   });
   wireDrops();
 }
@@ -272,14 +277,14 @@ function renderBoard() {
   const total = groups.reduce((s, b) => s + (b.productionIds || []).length, 0);
   if (!groups.length) {
     el.innerHTML = `<div class="agw-board-head"><b>任务看板</b><em>本会话</em></div>
-      <div class="agw-board-empty">${icon("kanban", 22)}<p>本会话发起量产后，每条任务的流水线出现在这里。阶段圆点实时点亮，点任务看详情，拖图直接回传。</p></div>`;
+      <div class="agw-board-empty">${icon("kanban", 22)}<p>本会话发起量产后，每条任务的流水线出现在这里。阶段圆点实时点亮，点任务看详情，拖图直接上传。</p></div>`;
     return;
   }
   el.innerHTML = `<div class="agw-board-head"><b>任务看板</b><em>本会话 · ${total} 条</em></div>` +
     groups.map(b => {
       const prods = batchProds(b);
       const done = prods.filter(p => p.stage === "delivered").length;
-      const PH = { drafting: "起草", awaiting_input: "待回传", generating: "生成", review: "待审", done: "完成" };
+      const PH = { drafting: "起草", awaiting_input: "待上传", generating: "生成", review: "待审", done: "完成" };
       return `<div class="mb-group">
         <div class="mb-ghead">
           <b>${esc(b.topic)}</b>
@@ -305,13 +310,13 @@ function renderBoard() {
     const ok = await confirmModal({ title: `删除任务「${p.title || p.topic || "未命名"}」？`, danger: true, okText: "删除" });
     if (ok) { removeProductionFromBatch(p.id); renderBoard(); renderPhase(); refreshLiveCards(); }
   }));
-  // 看板行拖拽回传
+  // 看板行拖拽上传
   $$("#agwBoard [data-dropprod]").forEach(row => {
     wireDropZone(row, async files => {
       const p = productionById(row.dataset.dropprod);
       if (!p) return;
       const r = await routeFilesToProduction(p, files);
-      if (r) toast(`已回传 ${r} 张到「${p.title || p.topic}」`);
+      if (r) toast(`已上传 ${r} 张到「${p.title || p.topic}」`);
     });
   });
 }
@@ -327,7 +332,7 @@ async function routeFilesToProduction(p, files) {
     const i = items.findIndex(x => !x.assetId);
     if (i < 0) break;
     const dataUrl = await fileToDataUrl(f);
-    const a = await addAssetFromDataUrl(p.accountId, { name: `${isImg ? "笔记图" : "分镜图"}${String(i + 1).padStart(2, "0")}_${(p.title || "").slice(0, 6)}`, tags: [isImg ? "笔记图" : "分镜图", "Agent回传"], dataUrl });
+    const a = await addAssetFromDataUrl(p.accountId, { name: `${isImg ? "笔记图" : "分镜图"}${String(i + 1).padStart(2, "0")}_${(p.title || "").slice(0, 6)}`, tags: [isImg ? "笔记图" : "分镜图", "Agent上传"], dataUrl });
     items[i].assetId = a.id; items[i].status = "done"; n++;
   }
   if (n) {
@@ -351,7 +356,7 @@ function renderPhase() {
     else c.draft++;
   }));
   const chip = (label, n, cls) => n ? `<span class="phase-chip ${cls}">${label} ${n}</span>` : "";
-  el.innerHTML = chip("起草", c.draft, "draft") + chip("待回传", c.wait, "wait") + chip("渲染", c.gen, "gen") + chip("待审", c.review, "review") + chip("失败", c.fail, "fail") + chip("已交付", c.done, "done");
+  el.innerHTML = chip("起草", c.draft, "draft") + chip("待上传", c.wait, "wait") + chip("渲染", c.gen, "gen") + chip("待审", c.review, "review") + chip("失败", c.fail, "fail") + chip("已交付", c.done, "done");
 }
 
 /* ---------- 事件 ---------- */
@@ -396,7 +401,7 @@ function wire(root) {
     state.ui.autoAdvance = e.target.checked;
     currentSessionBatches().forEach(b => { b.autoAdvance = e.target.checked; });
     save("meta", "batches");
-    toast(e.target.checked ? "已开启自动推进：回传齐自动渲染、完成自动进审核" : "已关闭自动推进：每个关口都会等你确认");
+    toast(e.target.checked ? "已开启自动推进：上传齐自动渲染、完成自动进入待发布" : "已关闭自动推进：每个关口都会等你确认");
   });
 
   // 全局委托
@@ -488,35 +493,18 @@ function wire(root) {
       case "open-prod": if (p) openProductionDrawer(p.id); break;
       case "batch-generate": if (batch) { const n = startGeneration(batch); toast(n ? `已派发 ${n} 个渲染任务` : "没有就绪任务"); } break;
       case "batch-retry": if (batch) { const n = retryFailedIn(batch); toast(n ? `正在重试 ${n} 个失败任务` : "没有失败任务"); } break;
-      case "batch-approve-all": if (batch) { const n = approveAll(batch); toast(`已通过 ${n} 条`); refreshLiveCards(); } break;
-      case "batch-submit-all": {
-        if (!batch) break;
-        let n = 0;
-        batchProds(batch).forEach(x => { if (x.stage === "review" && x.review.state !== "submitted") { submitForReview(x); n++; } });
-        toast(n ? `已提交 ${n} 条审核，等待审核员处理` : "没有可提交的内容");
-        refreshLiveCards();
-        break;
-      }
       case "batch-deliver-all": {
         if (!batch) break;
         const cnt = batchProds(batch).filter(x => x.stage === "review").length;
-        const ok = await confirmModal({ title: `通过并交付本批 ${cnt} 条内容？`, body: "未通过的会先自动通过，全部定稿入供应商端。", okText: "全部交付" });
-        if (ok) { approveAll(batch); const n = deliverAll(batch); toast(`已交付 ${n} 条入库`); }
+        if (!cnt) { toast("本批没有待发布的内容"); break; }
+        const r = await publishModal({ title: `定稿并发布本批 ${cnt} 条内容`, okText: "全部发布" });
+        if (r != null) { const n = deliverAll(batch, r); toast(`已发布 ${n} 条入供应商端${r.planDate ? ` · 计划 ${r.planDate}` : ""}`); refreshLiveCards(); }
         break;
       }
-      case "prod-submit": if (p) { submitForReview(p); refreshLiveCards(); } break;
-      case "prod-approve": if (p) { approveProduction(p); refreshLiveCards(); } break;
-      case "prod-approve-deliver": {
-        if (!p) break;
-        const ok = await confirmModal({ title: `通过并交付「${p.artifacts.copy.title || p.title}」？`, body: "审核通过后定稿入供应商端。", okText: "通过并交付" });
-        if (ok) { approveProduction(p); deliver(p); toast("已通过并交付"); refreshLiveCards(); }
-        break;
-      }
-      case "prod-reject": if (p) { await rejectFlow(p); refreshLiveCards(); } break;
       case "prod-deliver": {
         if (!p) break;
-        const ok = await confirmModal({ title: `交付「${p.artifacts.copy.title || p.title}」？`, body: "定稿入供应商端，可见可下载。", okText: "交付入库" });
-        if (ok) { deliver(p); toast("已交付入库"); }
+        const r = await publishModal({ title: `定稿并发布「${p.artifacts.copy.title || p.title}」` });
+        if (r != null) { const a = deliver(p, r); toast(a ? `已发布 · #${String(a.pubSeq).padStart(3, "0")}${a.planDate ? ` · 计划 ${a.planDate}` : ""}` : "发布失败"); refreshLiveCards(); }
         break;
       }
     }
@@ -611,5 +599,5 @@ function reportRoute(r) {
   if (!r) return;
   if (r.assigned) toast(`已接收 ${r.assigned} 张图，分发到 ${r.tasks} 个任务${r.extra ? `（多出 ${r.extra} 张未分发）` : ""}`);
   else if (r.videos) toast(`已登记 ${r.videos} 个视频素材入资产库`);
-  else toast("当前没有等待回传的任务，先发起一批量产");
+  else toast("当前没有等待上传的任务，先发起一批量产");
 }

@@ -19,6 +19,7 @@ import { agentView } from "./agent/view.js";
 import { studioView } from "./views/studio.js";
 import { assetsView } from "./views/assetsView.js";
 import { deliveryView } from "./views/deliveryView.js";
+import { draftsView } from "./views/draftsView.js";
 import { settingsView } from "./views/settings.js";
 import "./views/accountDialog.js";
 import { stagePage, openProductionDrawer } from "./views/prodDrawer.js";
@@ -62,51 +63,23 @@ function enterMember(member) {
   render();
   toast(`欢迎回来 · ${esc(member.name)}（${ROLE_LABEL[member.role] || ""}）`);
 }
-let gateMode = "login";
-function setGateMode(mode) {
-  gateMode = mode;
-  const gate = $("#loginGate");
-  $(".lg-card", gate).dataset.mode = mode;
-  $$(".lg-tab", gate).forEach(t => t.classList.toggle("is-active", t.dataset.lgmode === mode));
-  $(".lg-only-register", gate).hidden = mode !== "register";
-  $("#lgLogin", gate).textContent = mode === "register" ? "注册并进入 →" : "登录 →";
-  $("#lgHint", gate).textContent = mode === "register"
-    ? "注册即创建「创作成员」账号，可走批量/单号创作；管理员可在设置里调整你的权限。"
-    : "演示账号：管理员 admin/admin888 · 审核员 reviewer/888888 · 成员 editor/666666 · 供应商 supplier/222222";
-  $("#lgPin", gate).placeholder = "密码";
-  $("#lgPin2", gate).value = "";
-}
 function shakeCard() {
   const card = $(".lg-card");
   card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
 }
 function wireGate() {
   const gate = $("#loginGate");
-  $$(".lg-tab", gate).forEach(t => t.addEventListener("click", () => { setGateMode(t.dataset.lgmode); $("#lgUser").focus(); }));
+  // 仅登录：成员只能由管理员在设置里新增（不开放自助注册）
   const submit = () => {
     const username = ($("#lgUser").value || "").trim();
     const pin = ($("#lgPin").value || "").trim();
-    if (gateMode === "register") {
-      const pin2 = ($("#lgPin2").value || "").trim();
-      if (!username || !pin) { toast("请填写用户名和密码"); shakeCard(); return; }
-      if (username.length < 2) { toast("用户名至少 2 个字符"); shakeCard(); return; }
-      if (state.members.some(m => m.username === username)) { toast("该用户名已被注册", "error"); shakeCard(); return; }
-      if (pin.length < 4) { toast("密码至少 4 位"); shakeCard(); return; }
-      if (pin !== pin2) { toast("两次密码不一致", "error"); $("#lgPin2").value = ""; shakeCard(); return; }
-      const member = { id: uid(), name: username, username, pin, role: "editor", createdAt: Date.now() };
-      state.members.push(member);
-      saveMembers();
-      toast(`注册成功，欢迎加入 · ${esc(username)}`);
-      enterMember(member);
-      return;
-    }
+    if (!username || !pin) { toast("请填写用户名和密码"); shakeCard(); return; }
     const member = state.members.find(m => m.username === username && m.pin === pin);
     if (!member) { $("#lgPin").value = ""; shakeCard(); toast("用户名或密码不对，再试一次", "error"); return; }
     enterMember(member);
   };
   $("#lgLogin", gate).addEventListener("click", submit);
   gate.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
-  setGateMode("login");
 }
 function logout() {
   state.role = null;
@@ -170,7 +143,7 @@ function renderContextPanel() {
 }
 
 /* ---------- 顶栏 ---------- */
-const ZONE_TITLE = { overview: "首页", agent: "批量创作", studio: "单号创作", assets: "整体资产", delivery: "发布清单", settings: "设置" };
+const ZONE_TITLE = { overview: "首页", agent: "批量创作", studio: "单号创作", assets: "整体资产", drafts: "草稿箱", delivery: "发布清单", settings: "设置" };
 function renderTopbar() {
   const zone = document.body.dataset.zone;
   const bc = $("#topCrumb");
@@ -188,6 +161,7 @@ function paletteCommands() {
     { label: "批量创作", group: "导航", icon: "spark", run: () => go("agent") },
     { label: "单号创作", group: "导航", icon: "film", run: () => go("studio") },
     { label: "整体资产", group: "导航", icon: "folder", run: () => go("assets") },
+    { label: "草稿箱", group: "导航", icon: "inbox", run: () => go("drafts") },
     { label: "发布清单", group: "导航", icon: "package", run: () => go("delivery") },
     ...(state.role === "admin" ? [
       { label: "设置", group: "导航", icon: "gear", run: () => go("settings") },
@@ -226,13 +200,14 @@ async function boot() {
     registerView("agent", agentView);
     registerView("studio", studioView);
     registerView("assets", assetsView);
+    registerView("drafts", draftsView);
     registerView("delivery", deliveryView);
     registerView("settings", settingsView);
     initRouter();
 
     // 外壳
     $("#railBrand").innerHTML = brandGlyph(28);
-    $$("[data-nav]").forEach(b => b.addEventListener("click", () => go(b.dataset.nav)));
+    $$("[data-nav]").forEach(b => b.addEventListener("click", () => { state.ui.returnTo = null; go(b.dataset.nav); }));
     $("#navLogout").addEventListener("click", logout);
     $("#topSearch").addEventListener("click", () => openPalette(paletteCommands()));
     document.addEventListener("click", e => {

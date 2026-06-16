@@ -10,8 +10,8 @@ import { toast, confirmModal, promptModal, openModal, withLoading } from "../ui/
 import { uid } from "../core/util.js";
 
 const TYPE_LABEL = { language: "脚本 / 文案（语言模型）", image: "图片生成", video: "视频生成", tts: "TTS / 数字人" };
-const ROLE_DESC = { admin: "全功能 · 管账号/成员/设置 + 创作与审核", reviewer: "可创作 + 审核：通过并交付入供应商端 / 驳回", editor: "只走创作流程，仅能提交审核，不可入供应商端", supplier: "仅发布清单：下载素材 + 回传发布链接" };
-const ROLE_OPTS = ["admin", "reviewer", "editor", "supplier"];
+const ROLE_DESC = { admin: "全功能 · 管账号/成员/设置 + 创作与发布；可在发布清单标注「已审阅」+ 监管全量", editor: "创作成员：走创作流程，且可直接定稿发布入供应商端", supplier: "仅发布清单：下载素材 + 上传发布链接" };
+const ROLE_OPTS = ["admin", "editor", "supplier"];
 
 export const settingsView = {
   render(root) {
@@ -27,7 +27,7 @@ export const settingsView = {
               <div class="card-head"><b>接入服务</b><em>按能力配置 Provider，保存后立即生效</em></div>
               <div class="set-status">
                 <span class="cap ${LLM_CONFIG.apiKey ? "ok" : "warn"}">${icon("type", 13)} 语言模型 · ${LLM_CONFIG.apiKey ? "已就绪（" + esc(LLM_CONFIG.model) + "）" : "未配置"}</span>
-                <span class="cap ${imageApiConfigured() ? "ok" : "warn"}">${icon("image", 13)} 图片生成 · ${imageApiConfigured() ? "已配置" : "未接入 · 站外回传"}</span>
+                <span class="cap ${imageApiConfigured() ? "ok" : "warn"}">${icon("image", 13)} 图片生成 · ${imageApiConfigured() ? "已配置" : "未接入 · 站外上传"}</span>
                 <span class="cap ${videoApiConfigured() ? "ok" : "warn"}">${icon("film", 13)} 视频生成 · ${videoApiConfigured() ? "已配置" : "未接入 · 模拟引擎"}</span>
               </div>
               <div class="set-grid">

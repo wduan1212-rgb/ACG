@@ -2,7 +2,7 @@
 
 import { esc, gradFor, timeAgo } from "../core/util.js";
 import { icon, agentAvatar } from "../ui/icons.js";
-import { state, accountById, canReview } from "../core/store.js";
+import { state, accountById, canDeliver } from "../core/store.js";
 import { platChip, groupOf, tagsOf, TAG_POOL } from "../domain/accounts.js";
 import { STAGES, flowOf, normalizeStage, stageDone, statusPill, jobsOf } from "../domain/productions.js";
 import { batchById, batchProds, currentSessionBatches } from "./orchestrator.js";
@@ -86,17 +86,17 @@ const CARD = {
       else c.draft++;
     });
     const pct = prods.length ? Math.round(c.done / prods.length * 100) : 0;
-    const PHASE = { drafting: "批量起草中", awaiting_input: "等待回传", generating: "渲染中", review: "待审核", done: "已完成" };
+    const PHASE = { drafting: "批量起草中", awaiting_input: "等待上传", generating: "渲染中", review: "待发布", done: "已完成" };
     return `<div class="ag-card live" data-live="batch" data-batch="${b.id}">
       <div class="agc-head">${icon("pulse", 15)}<b>「${esc(b.topic)}」</b><span class="agc-state run">${PHASE[b.phase] || b.phase}</span></div>
       <div class="agp-bar"><i style="width:${pct}%"></i></div>
       <div class="agp-segs">
-        ${seg("起草", c.draft, "draft")}${seg("待回传", c.wait, "wait")}${seg("渲染", c.gen, "gen")}${seg("待审", c.review, "review")}${seg("已交付", c.done, "done")}${seg("失败", c.fail, "fail")}
+        ${seg("起草", c.draft, "draft")}${seg("待上传", c.wait, "wait")}${seg("渲染", c.gen, "gen")}${seg("待审", c.review, "review")}${seg("已交付", c.done, "done")}${seg("失败", c.fail, "fail")}
       </div>
     </div>`;
   },
 
-  /* 等待回传卡：内嵌拖拽热区 + 缺口列表 */
+  /* 等待上传卡：内嵌拖拽热区 + 缺口列表 */
   need_input(m) {
     const b = batchById(m.payload.batchId);
     if (!b) return `<div class="ag-bubble agent">批次已不存在</div>`;
@@ -124,9 +124,9 @@ const CARD = {
       </div>`;
     }).join("");
     return `<div class="ag-card live" data-live="batch" data-batch="${b.id}">
-      <div class="agc-head">${icon("upload", 15)}<b>等待站外出图回传</b><span class="agc-state wait">${waiting.length} 条任务</span></div>
+      <div class="agc-head">${icon("upload", 15)}<b>等待站外出图上传</b><span class="agc-state wait">${waiting.length} 条任务</span></div>
       <p class="agc-p">复制各任务的整段提示词去第三方模型出图，回来把图<b>直接拖进下面这块区域</b>（或拖到输入框），我会按顺序分发到各任务，全部就位后${b.autoAdvance ? "自动" : "等你确认再"}继续。</p>
-      ${rows ? `<div class="agn-list">${rows}</div>` : `<div class="agc-p ok">${icon("checkCircle", 14)} 已全部回传完成</div>`}
+      ${rows ? `<div class="agn-list">${rows}</div>` : `<div class="agc-p ok">${icon("checkCircle", 14)} 已全部上传完成</div>`}
       ${waiting.length ? `<div class="ag-drop" data-agdrop="${b.id}">
         <span class="agd-rings"><i></i><i></i></span>
         ${icon("upload", 18)}
@@ -137,45 +137,32 @@ const CARD = {
     </div>`;
   },
 
-  /* 审核卡：创作成员只能"提交审核"；审核员可通过并交付 / 驳回 */
+  /* 发布卡：创作者自检后直接「定稿发布」入供应商端（无强制审核门槛） */
   approval(m) {
     const b = batchById(m.payload.batchId);
     if (!b) return `<div class="ag-bubble agent">批次已不存在</div>`;
-    const reviewer = canReview();
+    const canPub = canDeliver();
     const prods = batchProds(b);
     const inReview = prods.filter(p => p.stage === "review");
     const failed = prods.filter(p => p.stageStatus === "failed");
     const rows = inReview.map(p => {
       const acc = accountById(p.accountId);
-      const approved = p.review.state === "approved";
-      const submitted = p.review.state === "submitted";
       const items = (p.mode === "图文" ? p.artifacts.images.items : p.artifacts.boards.items) || [];
       const cover = items.find(x => x.assetId);
       const coverUrl = cover ? urlFor(cover.assetId) : null;
-      return `<div class="agr-row ${approved ? "ok" : ""}">
+      return `<div class="agr-row">
         <span class="agr-cover">${coverUrl ? `<img src="${coverUrl}"/>` : `<i style="background:${gradFor(p.title)}">${p.mode === "图文" ? "图" : "片"}</i>`}</span>
-        <span class="agr-main"><b>${esc(p.artifacts.copy.title || p.title || p.topic)}</b><em>${esc(acc?.name || "")} · ${p.mode}${submitted && !reviewer ? " · 已提交待审" : ""}</em></span>
-        ${reviewer
-          ? (approved
-            ? `<span class="agr-ok">${icon("checkCircle", 14)} 已通过</span><button class="btn primary sm" data-act="prod-deliver" data-pid="${p.id}">交付</button>`
-            : `<button class="link-btn" data-act="open-prod" data-pid="${p.id}">查看</button>
-               <button class="btn ghost sm" data-act="prod-reject" data-pid="${p.id}">驳回</button>
-               <button class="btn primary sm" data-act="prod-approve-deliver" data-pid="${p.id}">通过并交付</button>`)
-          : (submitted
-            ? `<span class="agr-ok">${icon("clock", 13)} 已提交</span><button class="link-btn" data-act="open-prod" data-pid="${p.id}">查看</button>`
-            : `<button class="link-btn" data-act="open-prod" data-pid="${p.id}">查看</button>
-               <button class="btn primary sm" data-act="prod-submit" data-pid="${p.id}">提交审核</button>`)}
+        <span class="agr-main"><b>${esc(p.artifacts.copy.title || p.title || p.topic)}</b><em>${esc(acc?.name || "")} · ${p.mode}</em></span>
+        <button class="link-btn" data-act="open-prod" data-pid="${p.id}">查看</button>
+        ${canPub ? `<button class="btn primary sm" data-act="prod-deliver" data-pid="${p.id}">定稿发布</button>` : ""}
       </div>`;
     }).join("");
     return `<div class="ag-card live" data-live="batch" data-batch="${b.id}">
-      <div class="agc-head">${icon("eye", 15)}<b>${reviewer ? "人工审核" : "提交审核"}</b><span class="agc-state review">${inReview.length} 条${reviewer ? "待处理" : "待提交"}</span></div>
+      <div class="agc-head">${icon("eye", 15)}<b>定稿发布</b><span class="agc-state review">${inReview.length} 条待发布</span></div>
       ${rows || `<div class="agc-p ok">${icon("checkCircle", 14)} 本批全部处理完毕</div>`}
       ${failed.length ? `<div class="agc-p fail">${icon("alert", 13)} 另有 ${failed.length} 条失败 <button class="link-btn" data-act="batch-retry" data-batch="${b.id}">重试失败项</button></div>` : ""}
-      ${inReview.length ? `<div class="agc-foot">
-        ${reviewer
-          ? `<button class="btn ghost sm" data-act="batch-approve-all" data-batch="${b.id}">全部通过</button>
-             <button class="btn primary sm" data-act="batch-deliver-all" data-batch="${b.id}">${icon("package", 14)} 全部通过并交付</button>`
-          : `<button class="btn primary sm" data-act="batch-submit-all" data-batch="${b.id}">${icon("check", 14)} 全部提交审核</button>`}
+      ${inReview.length && canPub ? `<div class="agc-foot">
+        <button class="btn primary sm" data-act="batch-deliver-all" data-batch="${b.id}">${icon("package", 14)} 全部定稿发布</button>
       </div>` : ""}
     </div>`;
   },
@@ -240,7 +227,7 @@ export function boardRow(p) {
     sub = `<span class="mb-sub">渲染 ${ok}/${jobs.length}${run ? ` · ${run.progress}%` : ""}</span>`;
   } else if (p.stageStatus === "needs_input") {
     const items = (p.mode === "图文" ? p.artifacts.images.items : p.artifacts.boards.items) || [];
-    sub = `<span class="mb-sub">回传 ${items.filter(x => x.assetId).length}/${items.length}</span>`;
+    sub = `<span class="mb-sub">上传 ${items.filter(x => x.assetId).length}/${items.length}</span>`;
   } else if (p.stageStatus === "failed") {
     sub = `<span class="mb-sub fail-text">${esc((p.error || "失败").slice(0, 18))}</span>`;
   }

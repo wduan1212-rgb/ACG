@@ -41,7 +41,7 @@ function computeStats() {
       昨天交付: delivered.filter(a => dayKey(a.createdAt) === yest).length,
       已下载: delivered.filter(a => a.status === "已下载" || a.status === "已发布").length,
       未下载: delivered.filter(a => !a.status || a.status === "未下载").length,
-      已回传发布链接: delivered.filter(a => a.publishedUrl).length,
+      已上传发布链接: delivered.filter(a => a.publishedUrl).length,
       最新5条: delivered.slice(0, 5).map(a => ({ 名称: a.name, 标题: a.title, 状态: a.status, 链接: a.publishedUrl || "" }))
     },
     素材入库: { 今天: assetsToday, 昨天: assetsYest },
@@ -55,7 +55,7 @@ function computeStats() {
 
 /* 离线规则问答（无 LLM Key 时兜底，常见问题直接算） */
 function offlineAnswer(q, s) {
-  if (/下载|领取/.test(q)) return `已交付 ${s.交付.总数} 个素材：已下载 ${s.交付.已下载} 个、未下载 ${s.交付.未下载} 个${s.交付.已回传发布链接 ? `，其中 ${s.交付.已回传发布链接} 个已回传发布链接` : ""}。`;
+  if (/下载|领取/.test(q)) return `已交付 ${s.交付.总数} 个素材：已下载 ${s.交付.已下载} 个、未下载 ${s.交付.未下载} 个${s.交付.已上传发布链接 ? `，其中 ${s.交付.已上传发布链接} 个已上传发布链接` : ""}。`;
   if (/(昨天|今天).*(产出|素材|交付|多少)/.test(q) || /(产出|交付).*(昨天|今天)/.test(q)) {
     return `今天交付 ${s.交付.今天交付} 条、入库素材 ${s.素材入库.今天} 个；昨天交付 ${s.交付.昨天交付} 条、入库素材 ${s.素材入库.昨天} 个。`;
   }
@@ -64,7 +64,7 @@ function offlineAnswer(q, s) {
     return top[0] ? `本月产量前三：${top.map(a => `${a.名称}（${a.本月交付} 条）`).join("、")}。` : "还没有交付记录。";
   }
   if (/审核/.test(q)) return `当前 ${s.待审核} 条内容等待审核${s.失败任务 ? `，另有 ${s.失败任务} 条任务失败待重试` : ""}。`;
-  if (/发布|链接|回传/.test(q)) return `供应商已回传发布链接 ${s.交付.已回传发布链接} 条（共交付 ${s.交付.总数} 条）。`;
+  if (/发布|链接|上传/.test(q)) return `供应商已上传发布链接 ${s.交付.已上传发布链接} 条（共交付 ${s.交付.总数} 条）。`;
   if (/失败|出错/.test(q)) return `失败任务 ${s.失败任务} 条；渲染层面：成功 ${s.渲染任务.成功}、失败 ${s.渲染任务.失败}、进行中 ${s.渲染任务.进行中}。`;
   return `当前共 ${s.账号.length} 个账号；任务分布：${Object.entries(s.任务阶段分布).map(([k, v]) => `${k} ${v}`).join("、") || "暂无任务"}；累计交付 ${s.交付.总数} 条（已下载 ${s.交付.已下载}）。可以问我：昨天产出多少素材？供应商下载了多少？哪个账号产量最高？`;
 }
@@ -128,7 +128,7 @@ export const overviewView = {
         </section>
 
         <div class="ov-stats">
-          ${stat("等待回传", waiting.length, "站外出图后拖回即可", "agent", waiting.length ? "warn" : "")}
+          ${stat("等待上传", waiting.length, "站外出图后拖回即可", "agent", waiting.length ? "warn" : "")}
           ${stat("生成中", rendering.length, "渲染 / 分镜工坊", "agent", rendering.length ? "run" : "")}
           ${stat("待审核", inReview.length, "人工确认后交付", "agent", inReview.length ? "review" : "")}
           ${stat("失败待重试", failed.length, "一键重试", "agent", failed.length ? "fail" : "")}

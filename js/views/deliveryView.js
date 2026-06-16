@@ -3,13 +3,46 @@
 
 import { $, $$, esc, gradFor, timeAgo } from "../core/util.js";
 import { icon } from "../ui/icons.js";
-import { state, save, notify, accountById, productionById } from "../core/store.js";
+import { state, save, notify, accountById, productionById, canMarkReviewed } from "../core/store.js";
 import { platChip, modeLabel, PLATFORM_CODE } from "../domain/accounts.js";
-import { deliveredAssets, downloadDelivery, batchDownload } from "../domain/delivery.js";
+import { deliveredAssets, downloadDelivery, batchDownload, toggleAdminReviewed } from "../domain/delivery.js";
 import { urlFor } from "../domain/assets.js";
 import { openProductionDrawer } from "./prodDrawer.js";
 import { emptyState, toast, openLightbox, promptModal } from "../ui/components.js";
 import { copyText } from "../core/util.js";
+
+function deliveredItemHtml(asset, acc, i) {
+  const isImg = asset.type === "图集";
+  const coverId = isImg ? (asset.packAssetIds || [])[0] : null;
+  const u = coverId ? urlFor(coverId) : null;
+  const seq = asset.pubSeq ? `#${String(asset.pubSeq).padStart(3, "0")}` : "";
+  return `<div class="dv-item" style="--d:${i * 40}ms">
+    <span class="dv-node${i === 0 ? " latest" : ""}"></span>
+    <div class="dv-card card" data-aid="${asset.id}">
+      <div class="dv-head" data-dvtoggle>
+        <span class="dv-cover">${u ? `<img src="${u}"/>` : `<i style="background:${gradFor(asset.name)}">${isImg ? "图" : "▶"}</i>`}<em>${isImg ? `${(asset.packAssetIds || []).length} 张` : `${asset.clips || 0} 段`}</em></span>
+        <span class="dv-main">
+          <b>${seq ? `<span class="dv-seq">${seq}</span>` : ""}${esc(asset.title || asset.name)}</b>
+          <span class="dv-meta">${platChip(acc.platform, true)}<span class="tag acc">${esc(asset.byAccount || acc.name)}</span>${asset.planDate ? `<span class="tag date">${icon("clock", 10)} 计划 ${esc(asset.planDate)}</span>` : ""}${asset.adminReviewed ? `<span class="tag rev">${icon("checkCircle", 10)} 已审阅</span>` : ""}${asset.publishedUrl ? `<span class="tag pub">${icon("checkCircle", 10)} 已发布</span>` : ""}<em>${esc(asset.name)}${isImg ? ".zip" : ".mp4"}${asset.byMemberName ? ` · 由 ${esc(asset.byMemberName)} 发布` : ""} · ${timeAgo(asset.deliveredAt || asset.createdAt)} · 供应商：${asset.status || "未下载"}</em></span>
+        </span>
+        <span class="dv-chev">${icon("chevronDown", 14)}</span>
+      </div>
+      <div class="dv-detail" hidden>
+        ${asset.planDate || asset.publishNote ? `<div class="dv-pubmeta">${asset.planDate ? `<span>${icon("clock", 12)} 计划发布：<b>${esc(asset.planDate)}</b></span>` : ""}${asset.publishNote ? `<span>${icon("fileText", 12)} 备注：${esc(asset.publishNote)}</span>` : ""}</div>` : ""}
+        ${asset.publishedUrl ? `<div class="dv-published">${icon("link", 13)} 发布链接：<a href="${esc(asset.publishedUrl)}" target="_blank" rel="noopener noreferrer">${esc(asset.publishedUrl.slice(0, 64))}${asset.publishedUrl.length > 64 ? "…" : ""}</a><em>${asset.publishedAt ? timeAgo(asset.publishedAt) + "回传" : ""}</em></div>` : ""}
+        ${asset.copy ? `<pre class="dv-copy">${esc(asset.copy)}</pre>` : ""}
+        ${isImg && (asset.packAssetIds || []).length ? `<div class="cc-grid">${asset.packAssetIds.map((id, k) => { const uu = urlFor(id); return uu ? `<div class="cc-thumb"><img src="${uu}" data-dvimg/><span>${k + 1}</span></div>` : ""; }).join("")}</div>` : ""}
+        <div class="dv-actions">
+          <button class="btn ghost sm" data-dvact="copy">${icon("copy", 13)} 复制标题+文案</button>
+          <button class="btn ghost sm" data-dvact="download">${icon("download", 13)} 下载${isImg ? " zip" : "交付单"}</button>
+          <button class="btn ghost sm" data-dvact="link">${icon("link", 13)} ${asset.publishedUrl ? "修改发布链接" : "登记发布链接"}</button>
+          ${canMarkReviewed() ? `<button class="btn ghost sm" data-dvact="review">${icon("eye", 13)} ${asset.adminReviewed ? "取消已审阅" : "标记已审阅"}</button>` : ""}
+          ${asset.productionId ? `<button class="btn ghost sm" data-dvact="prod">${icon("eye", 13)} 全链路回看</button>` : ""}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
 
 async function returnLinkFlow(asset, acc, redraw) {
   const url = await promptModal({
@@ -62,51 +95,28 @@ export const deliveryView = {
     };
 
     function drawCreator(body, all) {
-      if (!all.length) { body.innerHTML = emptyState("package", "还没有交付记录", "链路走到「审核通过 → 交付入库」后会按时间汇总在这里"); return; }
-      body.innerHTML = `<div class="dv-flow">${all.map(({ asset, acc }, i) => {
-        const isImg = asset.type === "图集";
-        const coverId = isImg ? (asset.packAssetIds || [])[0] : null;
-        const u = coverId ? urlFor(coverId) : null;
-        return `<div class="dv-item" style="--d:${i * 40}ms">
-          <span class="dv-node${i === 0 ? " latest" : ""}"></span>
-          <div class="dv-card card">
-            <div class="dv-head" data-dvtoggle>
-              <span class="dv-cover">${u ? `<img src="${u}"/>` : `<i style="background:${gradFor(asset.name)}">${isImg ? "图" : "▶"}</i>`}<em>${isImg ? `${(asset.packAssetIds || []).length} 张` : `${asset.clips || 0} 段`}</em></span>
-              <span class="dv-main">
-                <b>${esc(asset.title || asset.name)}</b>
-                <span class="dv-meta">${platChip(acc.platform, true)}${asset.publishedUrl ? `<span class="tag pub">${icon("checkCircle", 10)} 已发布</span>` : ""}<em>${esc(acc.name)} · ${esc(asset.name)}${isImg ? ".zip" : ".mp4"} · ${timeAgo(asset.createdAt)} · 供应商：${asset.status || "未下载"}</em></span>
-              </span>
-              <span class="dv-chev">${icon("chevronDown", 14)}</span>
-            </div>
-            <div class="dv-detail" hidden>
-              ${asset.publishedUrl ? `<div class="dv-published">${icon("link", 13)} 发布链接：<a href="${esc(asset.publishedUrl)}" target="_blank" rel="noopener noreferrer">${esc(asset.publishedUrl.slice(0, 64))}${asset.publishedUrl.length > 64 ? "…" : ""}</a><em>${asset.publishedAt ? timeAgo(asset.publishedAt) + "回传" : ""}</em></div>` : ""}
-              ${asset.copy ? `<pre class="dv-copy">${esc(asset.copy)}</pre>` : ""}
-              ${isImg && (asset.packAssetIds || []).length ? `<div class="cc-grid">${asset.packAssetIds.map((id, k) => { const uu = urlFor(id); return uu ? `<div class="cc-thumb"><img src="${uu}" data-dvimg/><span>${k + 1}</span></div>` : ""; }).join("")}</div>` : ""}
-              <div class="dv-actions">
-                <button class="btn ghost sm" data-dvact="copy">${icon("copy", 13)} 复制标题+文案</button>
-                <button class="btn ghost sm" data-dvact="download">${icon("download", 13)} 下载${isImg ? " zip" : "交付单"}</button>
-                <button class="btn ghost sm" data-dvact="link">${icon("link", 13)} ${asset.publishedUrl ? "修改发布链接" : "登记发布链接"}</button>
-                ${asset.productionId ? `<button class="btn ghost sm" data-dvact="prod">${icon("eye", 13)} 全链路回看</button>` : ""}
-              </div>
-            </div>
-          </div>
-        </div>`;
-      }).join("")}</div>`;
+      body.innerHTML = all.length
+        ? `<div class="dv-flow">${all.map(({ asset, acc }, i) => deliveredItemHtml(asset, acc, i)).join("")}</div>`
+        : emptyState("package", "还没有发布记录", "在审核页点「定稿并发布」后，会按发布序号汇总在这里（未发布的内容在「草稿箱」）");
 
+      // 已发布列表
       $$(".dv-head", body).forEach(h => h.addEventListener("click", () => {
         const d = h.parentElement.querySelector(".dv-detail");
         d.hidden = !d.hidden;
         h.parentElement.classList.toggle("open", !d.hidden);
       }));
       $$("[data-dvimg]", body).forEach(im => im.addEventListener("click", e => { e.stopPropagation(); openLightbox(im, im.src, ""); }));
-      $$(".dv-card", body).forEach((card, idx) => {
-        const { asset } = all[idx];
+      $$(".dv-card", body).forEach(card => {
+        const asset = state.assets.find(x => x.id === card.dataset.aid);
+        if (!asset) return;
+        const acc = accountById(asset.accountId);
         card.querySelectorAll("[data-dvact]").forEach(b => b.addEventListener("click", async e => {
           e.stopPropagation();
           const act = b.dataset.dvact;
           if (act === "copy") copyText((asset.title || "") + "\n\n" + (asset.copy || ""), "已复制标题+文案");
           if (act === "download") { await downloadDelivery(asset); toast("已下载 " + asset.name); draw(); }
-          if (act === "link") await returnLinkFlow(asset, all[idx].acc, draw);
+          if (act === "link") await returnLinkFlow(asset, acc, draw);
+          if (act === "review") { const on = toggleAdminReviewed(asset); toast(on ? "已标记为「已审阅」" : "已取消「已审阅」"); draw(); }
           if (act === "prod" && asset.productionId && productionById(asset.productionId)) openProductionDrawer(asset.productionId);
         }));
       });
@@ -126,13 +136,15 @@ export const deliveryView = {
           <table class="sup-table">
             <thead><tr>
               <th class="c-check"><input type="checkbox" id="supAll" /></th>
-              <th>素材名</th><th>账号</th><th>平台</th><th>形式</th><th>标签</th><th>状态</th><th></th>
+              <th class="c-seq">序号</th>
+              <th>素材名</th><th>发布账号</th><th>平台</th><th>形式</th><th>标签</th><th>状态</th><th></th>
             </tr></thead>
             <tbody>${rows.length ? rows.map(({ asset, acc }) => `
               <tr data-sup="${asset.id}">
                 <td class="c-check"><input type="checkbox" class="sup-check" /></td>
-                <td class="sup-name"><b>${esc(asset.name)}</b>${asset.title ? `<em>${esc(asset.title)}</em>` : ""}</td>
-                <td>${esc(acc.name)}</td>
+                <td class="sup-seq">${asset.pubSeq ? `#${String(asset.pubSeq).padStart(3, "0")}` : "—"}</td>
+                <td class="sup-name"><b>${esc(asset.name)}</b>${asset.title ? `<em>${esc(asset.title)}</em>` : ""}${asset.planDate ? `<em class="sup-plan">${icon("clock", 10)} 计划发布 ${esc(asset.planDate)}</em>` : ""}${asset.publishNote ? `<em class="sup-pubnote" title="${esc(asset.publishNote)}">${icon("fileText", 10)} ${esc(asset.publishNote.slice(0, 20))}${asset.publishNote.length > 20 ? "…" : ""}</em>` : ""}</td>
+                <td><b>${esc(asset.byAccount || acc.name)}</b>${asset.byMemberName ? `<em class="sup-by">由 ${esc(asset.byMemberName)} 发布</em>` : ""}</td>
                 <td>${platChip(acc.platform, true)}</td>
                 <td>${modeLabel(acc)}</td>
                 <td><div class="sup-tags">${(asset.tags || []).slice(0, 4).map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div></td>
@@ -141,7 +153,7 @@ export const deliveryView = {
                   <button class="btn ghost sm" data-supdl="${asset.id}">${icon("download", 13)} 下载</button>
                   <button class="btn ${asset.publishedUrl ? "ghost" : "primary"} sm" data-suplink="${asset.id}">${icon("link", 13)} ${asset.publishedUrl ? "改链接" : "回传链接"}</button>
                 </td>
-              </tr>`).join("") : `<tr><td colspan="8" class="sup-empty">暂无成片素材。创作端交付后会按命名 + 标签自动进入这里。</td></tr>`}
+              </tr>`).join("") : `<tr><td colspan="9" class="sup-empty">暂无成片素材。创作端发布后会按发布序号 + 标签自动进入这里。</td></tr>`}
             </tbody>
           </table>
         </div>`;

@@ -122,9 +122,9 @@ export function createBatch(plan, sessionId) {
 
 /* 固定流程模板：一键发起规定动作（主题每号随机、风格用账号自带创作风格） */
 export const FLOW_TEMPLATES = {
-  notes: { label: "全部图文号 · 出一批笔记", group: "图文组", icon: "image", desc: "每号随机主题 · 风格用账号自带 · 站外出图回传" },
-  material: { label: "全部素材号 · 全自动出片", group: "素材", icon: "layers", desc: "随机主题 → 口播音频 → 逐镜头视频 → 智能混剪，无需人工回传" },
-  dh: { label: "全部真人号 · 出口播视频", group: "真人", icon: "user", desc: "每号随机主题 · 两段式提示词 · 分镜回传后自动渲染" }
+  notes: { label: "全部图文号 · 出一批笔记", group: "图文组", icon: "image", desc: "每号随机主题 · 风格用账号自带 · 站外出图上传" },
+  material: { label: "全部素材号 · 全自动出片", group: "素材", icon: "layers", desc: "随机主题 → 口播音频 → 逐镜头视频 → 智能混剪，无需人工上传" },
+  dh: { label: "全部真人号 · 出口播视频", group: "真人", icon: "user", desc: "每号随机主题 · 两段式提示词 · 分镜上传后自动渲染" }
 };
 export function templatePlan(key) {
   const t = FLOW_TEMPLATES[key];
@@ -264,7 +264,7 @@ export async function startBatch(plan, session) {
   return batch;
 }
 
-/* ---------- 回传完成后的推进 ---------- */
+/* ---------- 上传完成后的推进 ---------- */
 export function maybeAdvanceAfterInput(p) {
   const isImg = p.mode === "图文";
   const items = isImg ? p.artifacts.images.items : p.artifacts.boards.items;
@@ -315,10 +315,10 @@ export function approveAll(batch) {
   emit("batch:update", batch);
   return n;
 }
-export function deliverAll(batch) {
+export function deliverAll(batch, opts = {}) {
   let n = 0;
   batchProds(batch).forEach(p => {
-    if (p.stage === "review" && p.review.state === "approved") { if (deliver(p)) n++; }
+    if (p.stage === "review") { if (deliver(p, opts)) n++; }   // deliver 自带定稿，无需先 approve
   });
   evaluate(batch.id);
   return n;
@@ -345,14 +345,26 @@ export function retryFailedIn(batch) {
 }
 
 /* ---------- 阶段评估（事件驱动核心） ---------- */
-const lastEmitted = new Map(); // batchId -> phase 已发卡片去重
-
 export function evaluate(batchId) {
   const batch = batchById(batchId);
   if (!batch || batch.phase === "done") return;
   const prods = batchProds(batch);
   if (!prods.length) return;
   const session = state.sessions.find(s => s.id === batch.sessionId) || ensureSession();
+
+  // 老批次（改动前创建、无 emitted 标记）：用会话里已存在的卡片回填，避免刷新后重复发卡
+  if (!batch.emitted) {
+    batch.emitted = {};
+    const msgs = session.messages || [];
+    const has = (type, pred) => msgs.some(x => x.type === type && x.payload?.batchId === batch.id && (pred ? pred(x) : true));
+    if (has("need_input", x => x.payload?.mode !== "confirm_generate")) batch.emitted.awaiting_input = true;
+    if (has("need_input", x => x.payload?.mode === "confirm_generate")) batch.emitted.gen_wait = true;
+    if (has("approval")) batch.emitted.review = true;
+    if (has("results")) batch.emitted.done = true;
+    if (has("error")) batch.emitted.allfail = true;
+    // gen_kick 是纯文本无法精确回填：只要有任务已过/在渲染阶段，就认为已发过
+    if (prods.some(p => ["render", "workshop", "cut", "copy", "review", "delivered"].includes(p.stage))) batch.emitted.gen_kick = true;
+  }
 
   const drafting = prods.filter(p => p.stage === "script" && p.stageStatus !== "failed").length;
   const failed = prods.filter(p => p.stageStatus === "failed").length;
@@ -380,8 +392,8 @@ export function evaluate(batchId) {
     }
   });
 
-  const key = (ph) => `${batch.id}:${ph}`;
-  const emitOnce = (ph, fn) => { if (lastEmitted.get(batch.id) !== ph) { lastEmitted.set(batch.id, ph); fn(); } };
+  // 已发卡片/消息去重：持久化在 batch 上，刷新或状态震荡都不会重复发同一条
+  const emitOnce = (ph, fn) => { batch.emitted = batch.emitted || {}; if (!batch.emitted[ph]) { batch.emitted[ph] = true; fn(); } };
 
   if (drafting > 0) { batch.phase = "drafting"; }
   else if (waiting > 0) {
@@ -391,7 +403,12 @@ export function evaluate(batchId) {
     });
   } else if (renderPending > 0 || rendering.length > 0) {
     if (renderPending > 0 && batch.autoAdvance) {
-      emitOnce("gen_kick", () => agentSay("分镜全部回传完成，自动开始批量生成（并发 2，其余排队）。"));
+      // 素材号用站内分镜（无需上传）；真人号用站外分镜上传后渲染——措辞区分
+      const pend = prods.filter(p => (p.mode === "视频" && p.stage === "render" && p.stageStatus !== "running") || (p.stage === "workshop" && p.stageStatus !== "running"));
+      const allInhouse = pend.length > 0 && pend.every(p => p.stage === "workshop");
+      emitOnce("gen_kick", () => agentSay(allInhouse
+        ? "脚本就绪，自动开始批量生成分镜视频（站内分镜 · 并发 2，其余排队）。"
+        : "分镜全部上传完成，自动开始批量渲染（并发 2，其余排队）。"));
       startGeneration(batch);
     } else if (renderPending > 0 && !batch.autoAdvance) {
       batch.phase = "awaiting_input";
@@ -437,7 +454,7 @@ export function resumeActiveBatches() {
   return resumed;
 }
 
-/* ---------- 媒体路由：对话区拖图 → 顺序分发到等待回传的任务 ---------- */
+/* ---------- 媒体路由：对话区拖图 → 顺序分发到等待上传的任务 ---------- */
 export async function routeMediaFiles(files) {
   const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
   const vids = Array.from(files).filter(f => f.type.startsWith("video/"));
@@ -458,7 +475,7 @@ export async function routeMediaFiles(files) {
         const dataUrl = await fileToDataUrl(imgs[fi++]);
         const a = await addAssetFromDataUrl(p.accountId, {
           name: `${isImg ? "笔记图" : "分镜图"}${String(items.indexOf(item) + 1).padStart(2, "0")}_${(p.title || "").slice(0, 6)}`,
-          tags: [isImg ? "笔记图" : "分镜图", "Agent回传"], dataUrl
+          tags: [isImg ? "笔记图" : "分镜图", "Agent上传"], dataUrl
         });
         item.assetId = a.id; item.status = "done";
         took++; out.assigned++;
@@ -473,7 +490,7 @@ export async function routeMediaFiles(files) {
   }
   for (const f of vids) {
     const accId = state.productions.find(p => p.batchId)?.accountId || state.accounts[0]?.id;
-    if (accId) await addAssetFromFile(accId, f, { tags: ["Agent回传"] });
+    if (accId) await addAssetFromFile(accId, f, { tags: ["Agent上传"] });
   }
   evaluateAll();
   return out;
@@ -520,17 +537,17 @@ export async function handleUserText(text) {
     if (r.intent === "run_generation") {
       let total = 0;
       activeBatches().forEach(b => { total += startGeneration(b); });
-      agentSay(total ? `收到，已派发 ${total} 个生成任务（并发 2，其余排队）。看板可以实时盯进度。` : "当前没有就绪的渲染任务（分镜回传齐了才能生成）。");
+      agentSay(total ? `收到，已派发 ${total} 个生成任务（并发 2，其余排队）。看板可以实时盯进度。` : "当前没有就绪的渲染任务（分镜上传齐了才能生成）。");
       return;
     }
     if (r.intent === "approve_all") {
       let n = 0; activeBatches().forEach(b => n += approveAll(b));
-      agentSay(n ? `已通过 ${n} 条审核，说「全部交付」即可入库。` : "没有待审核的内容。");
+      agentSay(n ? `已标记 ${n} 条为可发布，说「全部发布」即可入供应商端。` : "没有待发布的内容。");
       return;
     }
     if (r.intent === "deliver_all") {
       let n = 0; activeBatches().forEach(b => n += deliverAll(b));
-      agentSay(n ? `已交付 ${n} 条内容：定稿入发布清单，供应商端可见可下载。` : "没有可交付的内容（需要先通过审核）。");
+      agentSay(n ? `已发布 ${n} 条内容：定稿入发布清单，供应商端按发布序号可见可下载。` : "没有可发布的内容。");
       return;
     }
     if (r.intent === "retry_failed") {
@@ -562,7 +579,7 @@ export async function handleUserText(text) {
     // chat
     try {
       const reply = await AI.chat([
-        { role: "system", content: `你是「量产 Agent」，一个内容生产工作台的调度助手。工作台能力：按账号定位批量起草脚本/图卡 → 站外出图回传 → （视频）模拟渲染 → 智能剪辑+字幕 → 人工审核 → 定稿交付。当前状态：${contextSummary()}。用简洁中文回答，不要 markdown 标题，必要时给出下一步建议（如「说出主题即可发起量产」）。` },
+        { role: "system", content: `你是「量产 Agent」，一个内容生产工作台的调度助手。工作台能力：按账号定位批量起草脚本/图卡 → 站外出图上传 → （视频）模拟渲染 → 智能剪辑+字幕 → 人工审核 → 定稿交付。当前状态：${contextSummary()}。用简洁中文回答，不要 markdown 标题，必要时给出下一步建议（如「说出主题即可发起量产」）。` },
         { role: "user", content: text }
       ]);
       agentSay(reply || statusText());
@@ -582,7 +599,7 @@ export function statusText() {
   }
   return bs.map(b => {
     const prods = batchProds(b);
-    const phase = { drafting: "批量起草中", awaiting_input: "等待分镜回传", generating: "渲染中", review: "待审核", done: "已完成" }[b.phase] || b.phase;
+    const phase = { drafting: "批量起草中", awaiting_input: "等待分镜上传", generating: "渲染中", review: "待审核", done: "已完成" }[b.phase] || b.phase;
     const fail = prods.filter(p => p.stageStatus === "failed").length;
     const done = prods.filter(p => p.stage === "delivered").length;
     return `「${b.topic}」：${phase} · ${done}/${prods.length} 已交付${fail ? ` · ${fail} 条失败（说"重试失败的"即可）` : ""}`;

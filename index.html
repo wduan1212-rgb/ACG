@@ -16,15 +16,15 @@
     <!-- 开屏 · 三身份口令登录 -->
     <div id="loginGate" class="login-gate" hidden>
       <div class="lg-stage">
-        <i class="lg-arc left"></i><i class="lg-arc right"></i>
+        <div class="lg-aurora"><i class="a1"></i><i class="a2"></i><i class="a3"></i></div>
         <i class="lg-ground"></i>
-        <i class="lg-beam b1"></i><i class="lg-beam b2"></i><i class="lg-beam b3"></i><i class="lg-beam b4"></i>
-        <i class="lg-glass"></i>
+        <i class="lg-deep"></i>
       </div>
       <div class="lg-particles" id="lgParticles"></div>
 
       <div class="lg-center">
         <div class="lg-logo">
+          <i class="lg-gather"></i>
           <img src="./logo.png" alt="ACG TV" class="lg-logo-img" onerror="this.style.display='none';this.nextElementSibling.style.display='block'" />
           <svg viewBox="0 0 235 50" width="248" height="53" aria-hidden="true" style="color:#fff;display:none">
             <defs>
@@ -45,10 +45,7 @@
         </div>
 
         <div class="lg-card" data-mode="login">
-          <div class="lg-tabs">
-            <button class="lg-tab is-active" data-lgmode="login" type="button">登录</button>
-            <button class="lg-tab" data-lgmode="register" type="button">注册</button>
-          </div>
+          <div class="lg-brand"><h1>欢迎登录</h1><p>ACG TV 内容工作台</p></div>
           <div class="lg-form">
             <label class="lg-field">
               <span class="lgf-ico"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M12 11a4 4 0 100-8 4 4 0 000 8z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
@@ -58,13 +55,9 @@
               <span class="lgf-ico"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M5 11h14v10H5z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 11V7a4 4 0 018 0v4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg></span>
               <input id="lgPin" type="password" autocomplete="current-password" placeholder="密码" />
             </label>
-            <label class="lg-field lg-only-register" hidden>
-              <span class="lgf-ico"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-              <input id="lgPin2" type="password" autocomplete="new-password" placeholder="再次输入密码" />
-            </label>
             <button class="lg-login" id="lgLogin" type="button">登录 →</button>
           </div>
-          <p class="lg-hint" id="lgHint">演示账号：管理员 admin/admin888 · 审核员 reviewer/888888 · 成员 editor/666666 · 供应商 supplier/222222</p>
+          <p class="lg-hint" id="lgHint">账号由管理员分配 · 忘记密码请联系管理员</p>
         </div>
         <p class="lg-foot">安全稳定 · 高效智能 · 创作无限</p>
       </div>
@@ -90,6 +83,10 @@
           <button class="rail-item" data-nav="assets" title="整体资产">
             <svg viewBox="0 0 24 24" width="19" height="19"><path d="M3 7a2 2 0 012-2h4l2 2h9a1 1 0 011 1v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
             <span>整体资产</span>
+          </button>
+          <button class="rail-item" data-nav="drafts" title="草稿箱">
+            <svg viewBox="0 0 24 24" width="19" height="19"><path d="M4 13h4l1.5 2.5h5L16 13h4M4 13l2.2-7.3A2 2 0 018.1 4h7.8a2 2 0 011.9 1.7L20 13v4a2 2 0 01-2 2H6a2 2 0 01-2-2v-4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+            <span>草稿箱</span>
           </button>
           <button class="rail-item" data-nav="delivery" title="发布清单">
             <svg viewBox="0 0 24 24" width="19" height="19"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.3 8.3L12 13l8.7-4.7M12 13v8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>

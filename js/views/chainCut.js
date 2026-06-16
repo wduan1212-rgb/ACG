@@ -1,7 +1,7 @@
 /* 链路 · 智能剪辑页：自动拼接 + 时间轴精修
    片段：拖拽排序 / 两端裁剪 / 播放头处分割 / 删除；字幕：自动铺入 / 拖动 / 拉伸 / 样式；SRT 导出；撤销；缩放 */
 
-import { $, $$, esc, gradFor, fmtTC, buildSRT, downloadBlob, clamp } from "../core/util.js";
+import { $, $$, esc, gradFor, fmtTC, buildSRT, downloadBlob, clamp, spreadCaption } from "../core/util.js";
 import { icon } from "../ui/icons.js";
 import { save, accountById } from "../core/store.js";
 import { autoAssemble, setStage, isMaterial, pickBgm } from "../domain/productions.js";
@@ -371,14 +371,15 @@ export function renderCutPage(root, p) {
     const rows = (p.artifacts.script.shots || []).filter(s => (s.line || "").trim());
     if (!rows.length) { toast("脚本里没有口播/画外音"); return; }
     snapshot();
-    let t = 0;
-    p.artifacts.subs = rows.map(s => {
+    let t = 0; const subs = [];
+    rows.forEach(s => {
       let st = t, en; const m = String(s.time || "").match(/(\d+)\s*-\s*(\d+)/);
       if (m) { st = +m[1]; en = +m[2]; } else { en = st + 3; } t = en;
-      return { start: st, end: en, text: s.line.trim() };
+      subs.push(...spreadCaption(s.line.trim(), st, en));
     });
+    p.artifacts.subs = subs;
     save("productions"); drawTimeline();
-    toast(`已从脚本填入 ${p.artifacts.subs.length} 条字幕`);
+    toast(`已从脚本填入 ${p.artifacts.subs.length} 条字幕（长句已自动断行）`);
   });
   $("#tlAddSub", root).addEventListener("click", () => {
     snapshot();

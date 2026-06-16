@@ -4,7 +4,7 @@
    素材（无数字人）：script(含口播音频) → workshop(分镜工坊一体节点) → cut(智能混剪+BGM) → copy → review */
 
 import { state, save, emit, accountById, ownedBy } from "../core/store.js";
-import { uid } from "../core/util.js";
+import { uid, spreadCaption } from "../core/util.js";
 import { BGM_POOL } from "../api/prompts.js";
 
 export const STAGES = {
@@ -41,7 +41,7 @@ export function normalizeStage(p) {
 }
 
 export const STATUS_LABEL = {
-  pending: "待开始", running: "进行中", needs_input: "等待回传", failed: "失败", done: "已完成"
+  pending: "待开始", running: "进行中", needs_input: "等待上传", failed: "失败", done: "已完成"
 };
 
 export function blankArtifacts() {
@@ -73,6 +73,7 @@ export function estimateAudio(shots) {
 /* 素材号：按 scene 把连贯镜头合并成「分镜单元」（一个单元 = 一条多镜头视频）
    needsImage = 单元内任一镜头含产品界面/logo/真实中文（必须先出分镜图再图生视频）；
    否则 t2v 直接文生视频（可选加参考图）。保留已有单元的提示词/图。 */
+export const UNIT_MAX_SEC = 15;   // 单镜头视频上限（当前视频模型不支持超过 15s）
 export function buildMaterialUnits(p) {
   const shots = p.artifacts.script.shots || [];
   const per = p.artifacts.audio.perShot || [];
@@ -81,20 +82,30 @@ export function buildMaterialUnits(p) {
   let cur = null;
   shots.forEach((s, i) => {
     const scene = s.scene != null ? s.scene : i + 1;
-    if (!cur || cur.scene !== scene) {
+    const d = (per[i] && per[i].dur) || 4;
+    // 换场景，或当前单元再加这一镜会超过 15s → 起一个新单元（同场景内继续分段）
+    if (!cur || cur.scene !== scene || (cur.shotIndexes.length && cur.dur + d > UNIT_MAX_SEC)) {
       cur = { id: uid(), scene, shotIndexes: [], needsImage: false, mode: "t2v",
         imagePrompt: "", videoPrompt: "", imageAssetId: null, refAssetId: null, dur: 0, status: "idle" };
       units.push(cur);
     }
     cur.shotIndexes.push(i);
     if (s.ui) cur.needsImage = true;
-    cur.dur += (per[i] && per[i].dur) || 4;
+    cur.dur += d;
   });
+  // 同场景内的分段序号（用于显示 S03·2/3）
+  const sceneTotal = {};
+  units.forEach(u => { sceneTotal[u.scene] = (sceneTotal[u.scene] || 0) + 1; });
+  const sceneSeq = {};
   units.forEach(u => {
     u.mode = u.needsImage ? "i2v" : "t2v";
-    u.dur = Math.round(u.dur * 10) / 10;
-    const o = old.find(x => x.scene === u.scene);
-    if (o) Object.assign(u, { id: o.id, imagePrompt: o.imagePrompt || "", videoPrompt: o.videoPrompt || "", imageAssetId: o.imageAssetId || null, refAssetId: o.refAssetId || null, mode: o.mode || u.mode });
+    u.dur = Math.min(UNIT_MAX_SEC, Math.round(u.dur * 10) / 10);
+    sceneSeq[u.scene] = (sceneSeq[u.scene] || 0) + 1;
+    u.part = sceneSeq[u.scene];
+    u.sceneParts = sceneTotal[u.scene];
+    // 按"首镜索引"匹配旧单元，脚本未变时稳定保留提示词/图（拆分后也对得上）
+    const o = old.find(x => (x.shotIndexes || []).includes(u.shotIndexes[0]));
+    if (o) { u.id = o.id; u.imagePrompt = o.imagePrompt || ""; u.videoPrompt = o.videoPrompt || ""; u.imageAssetId = o.imageAssetId || null; u.refAssetId = o.refAssetId || null; if (o.mode) u.mode = o.mode; }
   });
   p.artifacts.boards.units = units;
   return units;
@@ -195,7 +206,7 @@ export function statusPill(p) {
   if (p.stage === "delivered") return ["已交付", "delivered"];
   if (p.stageStatus === "failed") return ["失败", "failed"];
   if (p.stageStatus === "running") return [p.stage === "workshop" ? "全自动生成中" : STAGES[p.stage].label + "中", "running"];
-  if (p.stageStatus === "needs_input") return ["等待回传", "input"];
+  if (p.stageStatus === "needs_input") return ["等待上传", "input"];
   if (p.stage === "review") {
     if (p.review.state === "approved") return ["审核通过", "approved"];
     if (p.review.state === "submitted") return ["已提交待审", "review"];
@@ -275,12 +286,13 @@ export function autoAssemble(p) {
   }
   const rows = (p.artifacts.script.shots || []).filter(s => (s.line || "").trim());
   if (rows.length && !(p.artifacts.subs || []).length) {
-    let t = 0;
-    p.artifacts.subs = rows.map(s => {
+    let t = 0; const subs = [];
+    rows.forEach(s => {
       let st = t, en; const m = String(s.time || "").match(/(\d+)\s*-\s*(\d+)/);
       if (m) { st = +m[1]; en = +m[2]; } else { en = st + 3; } t = en;
-      return { start: st, end: en, text: s.line.trim() };
+      subs.push(...spreadCaption(s.line.trim(), st, en));
     });
+    p.artifacts.subs = subs;
   }
   touch(p);
   save("productions");
@@ -299,18 +311,20 @@ export function autoMixMaterial(p) {
   units.forEach((u, ui) => {
     const list = state.jobs.filter(j => j.productionId === p.id && j.segIndex === ui && j.status === "succeeded");
     const job = list[list.length - 1];
-    if (job) clips.push({ id: uid(), jobId: job.id, unitId: u.id, name: `场景${String(u.scene).padStart(2, "0")}`, dur: Math.max(1.5, Math.round(u.dur * 2) / 2), trimIn: 0 });
+    if (job) clips.push({ id: uid(), jobId: job.id, unitId: u.id, name: `场景${String(u.scene).padStart(2, "0")}${u.sceneParts > 1 ? `·${u.part}` : ""}`, dur: Math.min(UNIT_MAX_SEC, Math.max(1.5, Math.round(u.dur * 2) / 2)), trimIn: 0 });
   });
   if (clips.length) p.artifacts.timeline = clips;
-  // 字幕按口播时长顺排（逐镜头）
+  // 字幕按口播时长顺排（逐镜头），长句智能拆成 ≤18 字多条，避免一屏多行
   const per = p.artifacts.audio.perShot || [];
+  const subs = [];
   let t = 0;
-  p.artifacts.subs = shots.filter(s => (s.line || "").trim()).map((s, i) => {
-    const d = per[i]?.dur || 3;
-    const sub = { start: Math.round(t * 10) / 10, end: Math.round((t + d) * 10) / 10, text: s.line.trim() };
+  shots.forEach((s, i) => {
+    const d = (per[i] && per[i].dur) || 3;
+    const line = (s.line || "").trim();
+    if (line) subs.push(...spreadCaption(line, t, t + d));
     t += d;
-    return sub;
   });
+  p.artifacts.subs = subs;
   if (!p.artifacts.bgm) {
     const b = pickBgm(acc?.position, p.topic);
     p.artifacts.bgm = { name: b.name, mood: b.mood, volume: 0.25, auto: true };

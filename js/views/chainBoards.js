@@ -1,5 +1,5 @@
-/* 链路 · 分镜（视频）/ 成图（图文）页：统一参考图 + 逐张提示词 + 站外整段回传
-   图片 API 未接入：站内生成走模拟引擎占位，真实出图依赖站外回传 */
+/* 链路 · 分镜（视频）/ 成图（图文）页：统一参考图 + 逐张提示词 + 站外整段上传
+   图片 API 未接入：站内生成走模拟引擎占位，真实出图依赖站外上传 */
 
 import { $, $$, esc, gradFor, copyText, fileToDataUrl, wireDropZone } from "../core/util.js";
 import { icon } from "../ui/icons.js";
@@ -39,7 +39,7 @@ export function renderSlotsPage(root, p, isImg) {
         <div class="chain-main">
           <div class="page-head">
             <div><div class="eyebrow">${isImg ? "图文链路 · 成图" : "视频链路 · 分镜图"}</div>
-            <h2>${isImg ? "小红书笔记风 · 逐张出图回传" : "按脚本逐镜头出分镜图"} <span class="head-count">${got}/${items.length}</span></h2></div>
+            <h2>${isImg ? "小红书笔记风 · 逐张出图上传" : "按脚本逐镜头出分镜图"} <span class="head-count">${got}/${items.length}</span></h2></div>
             <div class="head-actions">
               ${isImg ? "" : `<button class="btn ghost" id="cbSkip">跳过此步 ${icon("arrowRight", 13)}</button>`}
               <button class="btn primary" id="cbNext">下一步：${isImg ? "文案" : "提示词"} ${icon("arrowRight", 14)}</button>
@@ -62,7 +62,7 @@ export function renderSlotsPage(root, p, isImg) {
           <div id="cbRefChooser" class="ref-chooser card" hidden></div>
 
           <div class="mode-tabs" data-active="${genMode}">
-            <button class="mode-tab ${genMode === "out" ? "is-active" : ""}" data-mode="out">站外出图<span>整段提示词 · 第三方生成回传</span></button>
+            <button class="mode-tab ${genMode === "out" ? "is-active" : ""}" data-mode="out">站外出图<span>整段提示词 · 第三方生成上传</span></button>
             <button class="mode-tab ${genMode === "in" ? "is-active" : ""}" data-mode="in">站内生成<span>${imageApiConfigured() ? "已接图片 API" : "图片 API 未接 · 模拟占位"}</span></button>
           </div>
 
@@ -78,13 +78,13 @@ export function renderSlotsPage(root, p, isImg) {
             <div class="ep-prompt" id="cbEpText" contenteditable="true">${esc(A.externalPrompt || "")}</div>
             <div class="ep-return" id="cbDrop">
               <div class="epd-core">${icon("upload", 20)}</div>
-              <div class="epd-text"><b>等待回传<i class="dots"><i>.</i><i>.</i><i>.</i></i></b><em>把生成的图拖进来或点击选择（多选）· 按顺序对应${isImg ? "图" : "分镜"} 1、2、3…并自动入库</em></div>
+              <div class="epd-text"><b>等待上传<i class="dots"><i>.</i><i>.</i><i>.</i></i></b><em>把生成的图拖进来或点击选择（多选）· 按顺序对应${isImg ? "图" : "分镜"} 1、2、3…并自动入库</em></div>
               <input type="file" accept="image/*" multiple hidden id="cbDropInput" />
             </div>
           </div>` : `
           <div class="inhouse-controls">
             <button class="btn gen" id="cbGenPrompts">${icon("spark", 15)} 按脚本生成${isImg ? "图片" : "分镜图"}提示词</button>
-            <span class="muted">${imageApiConfigured() ? "" : "图片 API 未接入：站内「生成」为模拟占位，建议用站外出图回传真实图片"}</span>
+            <span class="muted">${imageApiConfigured() ? "" : "图片 API 未接入：站内「生成」为模拟占位，建议用站外出图上传真实图片"}</span>
           </div>`}
 
           <div class="slot-cards" id="cbCards">${items.map((it, i) => slotCard(it, i, isImg)).join("") ||
@@ -201,7 +201,7 @@ export function renderSlotsPage(root, p, isImg) {
       const it = A.items[i];
       it.status = "loading"; draw();
       await new Promise(r => setTimeout(r, 1200 + Math.random() * 900));
-      it.status = "done"; // 图片 API 未接入：占位完成（不产生 assetId，不计入回传进度）
+      it.status = "done"; // 图片 API 未接入：占位完成（不产生 assetId，不计入上传进度）
       save("productions"); draw();
       toast(imageApiConfigured() ? `第 ${i + 1} 张已生成` : `第 ${i + 1} 张为模拟占位（接入图片 API 后即为真图）`);
     }));
@@ -212,7 +212,7 @@ export function renderSlotsPage(root, p, isImg) {
       const items = A.items || [];
       const got = items.filter(x => x.assetId).length;
       if (isImg) {
-        if (!got) { toast("还没有回传任何成图（至少回传 1 张）"); return; }
+        if (!got) { toast("还没有上传任何成图（至少上传 1 张）"); return; }
         if (p.stage === "images") setStage(p, "copy", "pending");
         go("studio", "copy");
       } else {
@@ -244,7 +244,7 @@ export function renderSlotsPage(root, p, isImg) {
     save("productions");
     const complete = (A.items || []).every(x => x.assetId);
     if (complete && p.stageStatus === "needs_input") maybeAdvanceAfterInput(p);
-    toast(`已回传 ${i + 1}/${A.items.length}${complete ? " ✓ 全部就位" : ""}`);
+    toast(`已上传 ${i + 1}/${A.items.length}${complete ? " ✓ 全部就位" : ""}`);
   }
 
   async function handleReturn(files) {

@@ -14,11 +14,11 @@ import { urlFor, addAssetFromDataUrl, replaceAssetBlob, thumbHtml } from "../dom
 import { createUnitVideoJobs } from "../agent/orchestrator.js";
 import { imageApiConfigured } from "../api/providers.js";
 import { toast, withLoading, openLightbox } from "../ui/components.js";
-import { go } from "../core/router.js";
+import { go, currentRoute } from "../core/router.js";
 import { stepperHtml, wireStepper } from "./studio.js";
 import { accountAssets as accAssets } from "../domain/accounts.js";
 
-let liveRoot = null, liveProd = null, wired = false;
+let liveRoot = null, liveProd = null, liveDraw = null, wired = false;
 
 export function renderWorkshopPage(root, p) {
   liveRoot = root; liveProd = p;
@@ -39,6 +39,7 @@ export function renderWorkshopPage(root, p) {
   };
 
   const draw = () => {
+    liveDraw = draw;
     const units = materialUnits(p);
     const okCount = units.filter((u, i) => jobOfUnit(i)?.status === "succeeded").length;
     const running = units.some((u, i) => ["queued", "submitted", "running"].includes(jobOfUnit(i)?.status || ""));
@@ -93,25 +94,30 @@ export function renderWorkshopPage(root, p) {
     const us = unitShots(p, u);
     const isI2V = u.needsImage;
     const imgU = u.imageAssetId ? urlFor(u.imageAssetId) : null;
-    const dur = Math.ceil(u.dur || 4);
+    const dur = Math.min(15, Math.ceil(u.dur || 4));
+    const ok = job && job.status === "succeeded";
+    const partLabel = u.sceneParts > 1 ? `·${u.part}` : "";
     let jobHtml = "";
     if (!job) jobHtml = `<button class="btn ghost sm" data-wsgen="${i}">${icon("film", 13)} 生成视频</button>`;
     else if (["queued", "submitted", "running"].includes(job.status))
       jobHtml = `<div class="wsj run"><span class="spin-dot"></span> ${job.status === "queued" ? "排队中" : `渲染 ${job.progress}%`}<i class="wsj-bar"><b style="width:${job.progress}%"></b></i></div>`;
-    else if (job.status === "succeeded")
-      jobHtml = `<div class="wsj ok">${icon("checkCircle", 13)} 片段就绪 · ${dur}s<button class="link-btn" data-wsgen="${i}">${icon("refresh", 11)} 重新生成</button></div>`;
+    else if (ok)
+      jobHtml = `<div class="wsj ok">${icon("checkCircle", 13)} 片段就绪 · ${dur}s</div>`;
     else
       jobHtml = `<div class="wsj fail">${icon("alert", 13)} ${esc((job.error || "失败").slice(0, 18))}<button class="link-btn" data-wsgen="${i}">${icon("refresh", 11)} 重试</button></div>`;
 
     return `<div class="ws-card card ${isI2V ? "i2v" : "t2v"}" data-ws="${i}">
       <div class="ws-head">
-        <span class="sc-num">S${String(u.scene).padStart(2, "0")}</span>
+        <span class="sc-num">S${String(u.scene).padStart(2, "0")}${partLabel}</span>
         <b>${us.length > 1 ? `连贯 ${us.length} 镜` : esc(us[0]?.idea || "分镜")}</b>
         <span class="ws-mode ${isI2V ? "i2v" : "t2v"}">${isI2V ? icon("image", 11) + " 图生视频" : icon("film", 11) + " 文生视频"}</span>
-        <span class="ws-dur">${icon("clock", 11)} ${dur}s</span>
+        <span class="ws-dur ${u.dur >= 15 ? "cap" : ""}">${icon("clock", 11)} ${dur}s${u.sceneParts > 1 ? " · 已按15s拆分" : ""}</span>
       </div>
-      <div class="ws-line">${icon("mic", 11)} ${esc(us.map(s => s.line || "").filter(Boolean).join(" ").slice(0, 90)) || "<i>无口播</i>"}</div>
-      <div class="ws-body ${isI2V ? "" : "single"}">
+      <div class="ws-align">
+        <div class="ws-al-head">${icon("mic", 11)} 口播 ↔ 画面对齐 <em class="muted">混剪时字幕按此逐句对齐</em></div>
+        ${alignRows(u, us)}
+      </div>
+      <div class="ws-body ${isI2V ? "" : "single"} ${ok ? "has-prev" : ""}">
         ${isI2V ? `
         <div class="ws-col">
           <div class="ws-label">① 分镜图提示词 <em class="muted">先出图，视频呼应它</em></div>
@@ -127,8 +133,31 @@ export function renderWorkshopPage(root, p) {
           <div class="sc-prompt" contenteditable="true" data-wsv="${i}" data-ph="点上方「仅生成提示词」自动填入">${esc(u.videoPrompt || "")}</div>
           <div class="ws-jobrow">${jobHtml}</div>
         </div>
+        ${ok ? `
+        <div class="ws-col ws-prevcol">
+          <div class="ws-label">成片预览 <em class="muted">示意首帧</em></div>
+          <div class="ws-prev-frame" data-wsprev="${i}" style="background:${imgU ? "#0a0e1a" : gradFor(u.videoPrompt || ("S" + u.scene))}">
+            ${imgU ? `<img src="${imgU}"/>` : ""}<span class="ws-prev-play">${icon("play", 18)}</span><span class="ws-prev-dur">${dur}s</span>
+          </div>
+          <div class="ws-prev-acts">
+            <button class="btn ghost sm" data-wsgen="${i}">${icon("refresh", 11)} 重生成</button>
+            ${isI2V ? `<label class="btn ghost sm">${icon("upload", 11)} 换图<input type="file" accept="image/*" hidden data-wsup="${i}" /></label>` : ""}
+          </div>
+        </div>` : ""}
       </div>
     </div>`;
+  }
+
+  /* 口播↔画面对齐：每镜的时间区间 + 口播原句 + 画面要点（单元内累计计时） */
+  function alignRows(u, us) {
+    const per = p.artifacts.audio.perShot || [];
+    let t = 0;
+    return (u.shotIndexes || []).map((si, k) => {
+      const s = us[k] || {};
+      const d = (per[si] && per[si].dur) || 3;
+      const a = t, b = t + d; t = b;
+      return `<div class="ws-al"><em>${a.toFixed(1)}-${b.toFixed(1)}s</em><b>${esc((s.line || "").trim() || "（无口播）")}</b><span>${esc((s.visual || s.idea || "").slice(0, 38))}</span></div>`;
+    }).join("");
   }
 
   async function ensurePrompts(force = false) {
@@ -213,7 +242,14 @@ export function renderWorkshopPage(root, p) {
       draw();
     }));
     $$("[data-wsimg]", root).forEach(im => im.addEventListener("click", () => openLightbox(im, im.src, "")));
-    // 单元卡拖图回传分镜图
+    // 成片预览：有首帧图就放大看示意首帧，否则提示接 API 后可播放
+    $$("[data-wsprev]", root).forEach(el => el.addEventListener("click", () => {
+      const u = materialUnits(p)[+el.dataset.wsprev];
+      const img = el.querySelector("img");
+      if (u && u.imageAssetId && img) openLightbox(img, urlFor(u.imageAssetId), `场景S${String(u.scene).padStart(2, "0")} · 成片首帧（示意）`);
+      else toast("成片预览为示意首帧；接入视频 API 后可在此播放成片");
+    }));
+    // 单元卡拖图上传分镜图
     $$(".ws-card.i2v", root).forEach(card => wireDropZone(card, async files => {
       const f = Array.from(files).find(x => x.type.startsWith("image/"));
       if (f) { await fillUnitImage(+card.dataset.ws, f); draw(); }
@@ -244,10 +280,14 @@ export function renderWorkshopPage(root, p) {
   if (!wired) {
     wired = true;
     on("job:update", j => {
-      if (!liveRoot || !liveRoot.isConnected || document.body.dataset.zone !== "studio") return;
+      // 任务匹配才处理；成片回绑要照常发生（即使已离开工坊页，剪辑页才拿得到正确片段）
       if (!liveProd || j.productionId !== liveProd.id) return;
       if (j.status === "succeeded") rebindUnitClip(liveProd, j.segIndex, j);
-      draw();
+      // 仅当「仍停在该任务的工坊页」才重渲染：否则会把已切换到的其它阶段页打回工坊（批量任务在跑时尤甚）
+      if (document.body.dataset.zone !== "studio") return;
+      if (currentRoute().page !== "workshop") return;
+      if (liveProd.id !== state.ui.activeProductionId) return;
+      (liveDraw || draw)();
     });
   }
 

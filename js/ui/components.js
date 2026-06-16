@@ -77,6 +77,39 @@ export function promptModal({ title, placeholder = "", value = "", okText = "确
   });
 }
 
+/* 定稿发布弹窗：可选「计划发布日期」+「简短备注」，两项都可留空跳过。
+   确认 → { planDate, note }（可能为空串）；取消 → null */
+export function publishModal({ title = "定稿并发布", okText = "定稿并发布", date = "", note = "" } = {}) {
+  return new Promise(res => {
+    const ov = document.createElement("div");
+    ov.className = "modal-ov";
+    ov.innerHTML = `
+      <div class="modal-panel sm" role="dialog">
+        <div class="mp-head"><b>${esc(title)}</b></div>
+        <div class="mp-body">
+          <p class="mp-sub">定稿后入供应商端，按发布序号可见可下载。下面两项都可不填、直接发布：</p>
+          <label class="field"><span>计划发布日期（可选）</span><input class="input" type="date" id="pubDate" value="${esc(date)}" /></label>
+          <label class="field"><span>备注（可选，几句话）</span><textarea class="input" id="pubNote" rows="2" placeholder="例如：周五晚高峰发，配合活动话题">${esc(note)}</textarea></label>
+        </div>
+        <div class="mp-foot">
+          <button class="btn ghost" data-r="0">取消</button>
+          <button class="btn primary" data-r="1">${esc(okText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    requestAnimationFrame(() => ov.classList.add("open"));
+    let closed = false;
+    const close = v => { if (closed) return; closed = true; ov.classList.remove("open"); setTimeout(() => ov.remove(), 200); res(v); };
+    ov.addEventListener("click", e => {
+      if (e.target === ov) return close(null);
+      const b = e.target.closest("[data-r]");
+      if (!b) return;
+      if (b.dataset.r === "1") close({ planDate: $("#pubDate", ov).value || "", note: $("#pubNote", ov).value.trim() });
+      else close(null);
+    });
+  });
+}
+
 /* ---------- 大弹层 / 抽屉 ---------- */
 export function openModal(html, { wide = false, onMount } = {}) {
   const ov = document.createElement("div");

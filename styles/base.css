@@ -152,26 +152,14 @@ body.role-editor .rail-item[data-nav="settings"] { display: none; }
 }
 /* 舞台：左右霓虹光弧 + 地面光晕 + 立柱光束 */
 .lg-stage { position: absolute; inset: 0; pointer-events: none; }
-.lg-arc {
-  position: absolute; bottom: -42vh; width: 90vh; height: 90vh; border-radius: 50%;
-  border: 3px solid transparent; opacity: .85;
-  filter: blur(1px) drop-shadow(0 0 18px currentColor);
-  animation: arcPulse 5.5s ease-in-out infinite;
-}
-.lg-arc.left {
-  left: -32vh; color: #B557FF;
-  border-top-color: rgba(181, 87, 255, .95);
-  border-left-color: rgba(181, 87, 255, .25);
-  transform: rotate(-32deg);
-}
-.lg-arc.right {
-  right: -32vh; color: #2E9CF6;
-  border-top-color: rgba(46, 156, 246, .95);
-  border-right-color: rgba(46, 156, 246, .25);
-  transform: rotate(32deg);
-  animation-delay: 1.2s;
-}
-@keyframes arcPulse { 50% { opacity: .45; filter: blur(2px) drop-shadow(0 0 30px currentColor); } }
+/* 极光氛围：几团柔和色雾缓慢漂移（替代生硬弧线/光束，更高级） */
+.lg-aurora { position: absolute; inset: 0; overflow: hidden; }
+.lg-aurora i { position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5; mix-blend-mode: screen; will-change: transform; }
+.lg-aurora .a1 { width: 60vw; height: 60vw; left: -16vw; top: -16vh; background: radial-gradient(circle, rgba(122, 77, 255, .55), transparent 64%); animation: auroraDrift 26s ease-in-out infinite; }
+.lg-aurora .a2 { width: 54vw; height: 54vw; right: -14vw; top: -8vh; background: radial-gradient(circle, rgba(46, 140, 255, .5), transparent 64%); animation: auroraDrift 32s ease-in-out infinite reverse; }
+.lg-aurora .a3 { width: 72vw; height: 48vw; left: 14vw; bottom: -22vh; background: radial-gradient(circle, rgba(34, 184, 210, .3), transparent 66%); animation: auroraDrift2 36s ease-in-out infinite; }
+@keyframes auroraDrift { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(6vw, 5vh) scale(1.12); } }
+@keyframes auroraDrift2 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-7vw, -4vh) scale(1.08); } }
 .lg-ground {
   position: absolute; left: 50%; bottom: -14vh; transform: translateX(-50%);
   width: 130vw; height: 36vh; border-radius: 50%;
@@ -180,34 +168,12 @@ body.role-editor .rail-item[data-nav="settings"] { display: none; }
     radial-gradient(closest-side, rgba(34, 168, 232, .12), transparent 80%);
   filter: blur(6px);
 }
-/* 玻璃地台：镜面反光带 + 高光边缘 + 静态斜向光泽 */
-.lg-glass {
-  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-  width: 168vw; height: 32vh;
-  background:
-    linear-gradient(180deg, rgba(150, 168, 255, .12) 0%, rgba(122, 77, 255, .05) 26%, rgba(8, 10, 24, 0) 64%),
-    radial-gradient(130vw 30vh at 50% 0%, rgba(46, 156, 246, .10), transparent 72%);
-  border-top: 1px solid rgba(168, 186, 255, .18);
-  box-shadow: 0 -1px 40px rgba(120, 140, 255, .12);
-}
-.lg-glass::before {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(104deg, transparent 34%, rgba(255, 255, 255, .05) 50%, transparent 66%);
-}
-.lg-beam {
-  position: absolute; bottom: 18vh; width: 2px; height: 0;
-  background: linear-gradient(180deg, currentColor, transparent);
-  box-shadow: 0 0 12px currentColor;
-  animation: beamUp 4.5s ease-out infinite;
-}
-.lg-beam.b1 { left: 12%; color: rgba(181, 87, 255, .8); animation-delay: 0s; }
-.lg-beam.b2 { left: 22%; color: rgba(140, 120, 255, .6); animation-delay: 1.6s; }
-.lg-beam.b3 { right: 20%; color: rgba(70, 160, 246, .7); animation-delay: .8s; }
-.lg-beam.b4 { right: 10%; color: rgba(34, 184, 207, .8); animation-delay: 2.4s; }
-@keyframes beamUp {
-  0% { height: 0; opacity: 0; transform: translateY(0); }
-  25% { height: 90px; opacity: 1; }
-  100% { height: 90px; opacity: 0; transform: translateY(-26vh); }
+/* 水面深处：底部柔和冷光（无生硬水线），承托登录框倒影 */
+.lg-deep {
+  position: absolute; left: 50%; bottom: -12vh; transform: translateX(-50%);
+  width: 150vw; height: 48vh; border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(40, 70, 160, .2), rgba(20, 30, 80, .07) 56%, transparent 78%);
+  filter: blur(12px);
 }
 .lg-particles i {
   position: absolute; left: var(--x); bottom: -10px; width: 3px; height: 3px; border-radius: 50%;
@@ -216,27 +182,43 @@ body.role-editor .rail-item[data-nav="settings"] { display: none; }
 }
 @keyframes rise { to { transform: translateY(-105vh); opacity: 0; } }
 
-.lg-center { position: relative; display: flex; flex-direction: column; align-items: center; animation: gateIn .6s var(--ease); }
-@keyframes gateIn { from { opacity: 0; transform: translateY(16px) scale(.985); } }
+/* 居中的是「登录卡 + 页脚」，整体略微下移到中心偏下；logo 脱离文档流浮在卡片上方，
+   这样无论 logo 多大都不会把登录卡顶出画面 */
+.lg-center { position: relative; top: 6vh; display: flex; flex-direction: column; align-items: center; animation: gateIn .7s var(--ease) .15s both; }
+@keyframes gateIn { from { opacity: 0; transform: translateY(20px); } }
 .lg-logo {
-  margin-bottom: 24px;
-  filter: drop-shadow(0 0 30px rgba(122, 77, 255, .5)) drop-shadow(0 0 64px rgba(46, 156, 246, .28));
-  animation: logoFloat 6s ease-in-out infinite;
-  -webkit-box-reflect: below 1px linear-gradient(rgba(0, 0, 0, .5), rgba(0, 0, 0, 0) 58%);
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 18px);
+  margin-inline: auto; width: fit-content;
+  filter: drop-shadow(0 0 34px rgba(122, 77, 255, .55)) drop-shadow(0 0 72px rgba(46, 156, 246, .3));
+  animation: lgConverge 1.2s cubic-bezier(.18, .7, .16, 1) both;
 }
-@keyframes logoFloat { 50% { transform: translateY(-7px); } }
-.lg-logo-img { width: 280px; max-width: 70vw; height: auto; object-fit: contain; }
+.lg-logo-img { display: block; width: 540px; max-width: 92vw; height: auto; max-height: 30vh; object-fit: contain; position: relative; z-index: 1; animation: logoFloat 6.5s ease-in-out 1.2s infinite; }
+@keyframes logoFloat { 50% { transform: translateY(-8px); } }
+/* 开屏：聚焦成形（模糊放大 → 清晰归位） */
+@keyframes lgConverge {
+  0%   { opacity: 0; transform: scale(1.4); filter: blur(22px); }
+  55%  { opacity: 1; filter: blur(4px); }
+  100% { opacity: 1; transform: scale(1); filter: blur(0) drop-shadow(0 0 34px rgba(122, 77, 255, .55)) drop-shadow(0 0 72px rgba(46, 156, 246, .3)); }
+}
+/* 开屏：双层光环向 logo 收拢（汇聚） */
+.lg-gather { position: absolute; left: 50%; top: 50%; width: 460px; height: 460px; transform: translate(-50%, -50%); pointer-events: none; z-index: 0; }
+.lg-gather::before, .lg-gather::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(150, 130, 255, .5); animation: lgGather 1.25s cubic-bezier(.2, .6, .2, 1) both;
+}
+.lg-gather::after { border-color: rgba(60, 170, 255, .42); animation-delay: .18s; }
+@keyframes lgGather { 0% { transform: scale(1.7); opacity: 0; } 35% { opacity: .75; } 100% { transform: scale(.18); opacity: 0; } }
 .lg-tabs { display: flex; gap: 4px; background: rgba(0, 0, 0, .28); border-radius: var(--r-md); padding: 4px; margin-bottom: 18px; }
 .lg-tab { flex: 1; padding: 9px; border-radius: var(--r-sm); font-size: 13px; font-weight: 650; color: var(--d-faint); transition: all var(--t-fast); }
 .lg-tab.is-active { background: rgba(255, 255, 255, .08); color: #fff; box-shadow: inset 0 0 0 1px rgba(150, 160, 255, .2); }
 .lg-card {
   position: relative; width: min(500px, calc(100vw - 48px));
-  background: rgba(16, 18, 34, .66);
-  border: 1px solid rgba(150, 160, 255, .16);
+  background: rgba(18, 20, 38, .42);
+  border: 1px solid rgba(170, 182, 255, .2);
   border-radius: 24px; padding: 28px 28px 22px;
-  box-shadow: 0 40px 120px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px rgba(255, 255, 255, .02);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-box-reflect: below 10px linear-gradient(rgba(0, 0, 0, .28), rgba(0, 0, 0, 0) 44%);
+  box-shadow: 0 50px 130px rgba(0, 0, 0, .62), inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .03);
+  backdrop-filter: blur(40px) saturate(1.6);
+  -webkit-backdrop-filter: blur(40px) saturate(1.6);
 }
 /* 玻璃材质：斜向高光泽 */
 .lg-card::before {
@@ -274,7 +256,7 @@ body.role-editor .rail-item[data-nav="settings"] { display: none; }
 }
 .lg-login:hover { transform: translateY(-1px); box-shadow: 0 14px 34px rgba(99, 80, 255, .52); }
 .lg-hint { color: var(--d-faint); font-size: 10.5px; margin-top: 14px; text-align: center; line-height: 1.7; }
-.lg-foot { color: var(--d-faint); font-size: 11.5px; margin-top: 76px; letter-spacing: .3em; }
+.lg-foot { color: var(--d-faint); font-size: 11.5px; margin-top: 30px; letter-spacing: .3em; }
 
 /* ---------- toast ---------- */
 .toast {

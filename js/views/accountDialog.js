@@ -82,7 +82,7 @@ export function openAccountDialog(accountId = null) {
                 ${draft.charDataUrl ? `<img class="ad-char-prev" src="${draft.charDataUrl}"/>` : ""}
               </div>
               <div class="ad-ai-board">
-                <div class="adb-head"><b>${icon("wand", 13)} 没有角色版？AI 生成一张身份板</b><em class="muted">随机方向 → 生成提示词 → 第三方出图 → 回传</em></div>
+                <div class="adb-head"><b>${icon("wand", 13)} 没有角色版？AI 生成一张身份板</b><em class="muted">随机方向 → 生成提示词 → 第三方出图 → 上传</em></div>
                 <div class="ad-dir-row">
                   <button class="dice" id="adDirDice" title="随机角色风格方向">${icon("dice", 14)}</button>
                   <input class="input" id="adDirInput" placeholder="点骰子随机一个角色风格方向，可手改" />
@@ -91,7 +91,7 @@ export function openAccountDialog(accountId = null) {
                 <pre class="ad-char-prompt" id="adCharPrompt" hidden></pre>
                 <div class="head-actions" id="adCharActs" hidden>
                   <button class="btn ghost sm" id="adCharCopy">${icon("copy", 13)} 复制整段提示词</button>
-                  <label class="btn primary sm">${icon("upload", 13)} 回传身份版<input type="file" accept="image/*" hidden id="adCharReturn" /></label>
+                  <label class="btn primary sm">${icon("upload", 13)} 上传身份版<input type="file" accept="image/*" hidden id="adCharReturn" /></label>
                 </div>
               </div>
             </div>` : ""}
@@ -156,11 +156,11 @@ export function openAccountDialog(accountId = null) {
             $("#adCharPrompt", root).textContent = buildCharBoardPrompt(dir);
             $("#adCharPrompt", root).hidden = false;
             $("#adCharActs", root).hidden = false;
-            toast("提示词已生成：复制去第三方出图，回来点「回传身份版」");
+            toast("提示词已生成：复制去第三方出图，回来点「上传身份版」");
           });
           $("#adCharCopy", root).addEventListener("click", () => copyText($("#adCharPrompt", root).textContent, "已复制身份板提示词"));
           $("#adCharReturn", root).addEventListener("change", async e => {
-            if (e.target.files[0]) { draft.charDataUrl = await fileToDataUrl(e.target.files[0]); draw(); toast("身份版已回传，将作为角色参考版"); }
+            if (e.target.files[0]) { draft.charDataUrl = await fileToDataUrl(e.target.files[0]); draw(); toast("身份版已上传，将作为角色参考版"); }
           });
         }
 
@@ -198,7 +198,7 @@ export function openAccountDialog(accountId = null) {
           const name = draft.name.trim();
           if (!name) { toast("请填写账号名称"); return; }
           const isDH = draft.mode === "视频" && draft.subType === "数字人";
-          if (isDH && !editing && !draft.charDataUrl) { toast("数字人账号请先上传或回传角色参考版"); return; }
+          if (isDH && !editing && !draft.charDataUrl) { toast("数字人账号请先上传或上传角色参考版"); return; }
 
           let acc;
           if (editing) {

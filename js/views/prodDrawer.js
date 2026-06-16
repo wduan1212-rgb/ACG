@@ -2,20 +2,17 @@
 
 import { esc, gradFor, copyText, fileToDataUrl, wireDropZone, $, $$ } from "../core/util.js";
 import { icon } from "../ui/icons.js";
-import { state, save, notify, accountById, productionById, canReview, currentMember } from "../core/store.js";
-import { openDrawer, toast, confirmModal, promptModal, openLightbox } from "../ui/components.js";
-import { STAGES, flowOf, isMaterial, setStage, setStatus, jobsOf } from "../domain/productions.js";
+import { state, save, accountById, productionById, canDeliver } from "../core/store.js";
+import { openDrawer, toast, confirmModal, openLightbox, publishModal } from "../ui/components.js";
+import { STAGES, jobsOf } from "../domain/productions.js";
 import { platChip } from "../domain/accounts.js";
 import { urlFor } from "../domain/assets.js";
 import { addAssetFromDataUrl } from "../domain/assets.js";
 import { deliver } from "../domain/delivery.js";
 import { maybeAdvanceAfterInput } from "../agent/orchestrator.js";
-import { go } from "../core/router.js";
+import { go, currentRoute } from "../core/router.js";
 
-/* 退回阶段：图文→成图；素材→工坊；真人→分镜 */
-const rejectTargetStage = p => p.mode === "图文" ? "images" : isMaterial(p) ? "workshop" : "boards";
-
-/* 成片预览：9:16 预览帧 + 分镜缩略胶片条（方便审核看成片构成） */
+/* 成片预览：9:16 预览帧 + 分镜缩略胶片条（方便发布前自检看成片构成） */
 export function reviewPreviewHtml(p) {
   if (p.mode === "图文") {
     const imgs = (p.artifacts.images.items || []).filter(x => x.assetId);
@@ -48,34 +45,6 @@ export function reviewPreviewHtml(p) {
       return `<div class="rvp-clip"><div class="rvp-clip-thumb">${url ? `<img src="${url}"/>` : `<i style="background:${gradFor(c.name)}"></i>`}</div><span>${esc(c.name)}</span><em>${c.dur || 15}s</em></div>`;
     }).join("")}</div>
   </div>`;
-}
-
-/* 创作成员提交审核（不入供应商端，等审核员处理） */
-export function submitForReview(p) {
-  p.review.state = "submitted";
-  p.review.submittedBy = currentMember()?.name || "";
-  p.review.submittedAt = Date.now();
-  setStage(p, "review", "pending");
-  notify("review", `待审核：${p.artifacts.copy.title || p.title || p.topic}`, `${currentMember()?.name || "成员"} 提交了一条内容，等待审核`);
-  toast("已提交审核，等待审核员通过后入库");
-}
-
-export async function rejectFlow(p) {
-  const notes = await promptModal({ title: "驳回原因（会退回创作者重做）", placeholder: "例如：第3张图文字乱码，重新出图" });
-  if (notes == null) return false;
-  p.review.state = "rejected";
-  p.review.notes = notes;
-  p.review.returnTo = rejectTargetStage(p);
-  setStage(p, p.review.returnTo, "needs_input");
-  notify("review", `已驳回：${p.artifacts.copy.title || p.title || p.topic}`, `退回「${STAGES[p.review.returnTo].label}」· ${notes}`);
-  toast("已驳回，任务退回创作者「" + STAGES[p.review.returnTo].label + "」");
-  return true;
-}
-
-export function approveProduction(p) {
-  p.review.state = "approved";
-  p.review.at = Date.now();
-  save("productions");
 }
 
 export function openProductionDrawer(pid, tab) {
@@ -111,22 +80,22 @@ export function openProductionDrawer(pid, tab) {
           <div class="pd-body">${TAB[curTab] ? TAB[curTab](p) : ""}</div>
           <div class="pd-foot">
             <span class="muted">${p.error ? `⚠ ${esc(p.error)}` : ""}</span>
-            <button class="btn ghost sm" data-pd="workbench">${icon("external", 14)} 进入完整工作台</button>
+            <button class="btn ghost sm" data-pd="workbench">${icon("sliders", 14)} 去这一步微调并重新生成</button>
           </div>`;
         wire(root);
       };
 
       const wire = (rootEl) => {
         rootEl.querySelectorAll(".pd-tab").forEach(b => b.addEventListener("click", () => { curTab = b.dataset.tab; render(); }));
-        // 进工作台
-        const wb = rootEl.querySelector('[data-pd="workbench"]');
-        if (wb) wb.addEventListener("click", () => {
+        // 去工作台微调：按当前页签路由到对应可编辑节点（再在那里重新生成）
+        rootEl.querySelectorAll('[data-pd="workbench"]').forEach(wb => wb.addEventListener("click", () => {
           state.ui.activeAccountId = p.accountId;
           state.ui.activeProductionId = p.id;
+          state.ui.returnTo = currentRoute();   // 记住来处，工作台里给「返回」按钮用
           save("meta");
           close();
-          go("studio", stagePage(p));
-        });
+          go("studio", tabStage(p, curTab));
+        }));
         // 脚本编辑
         rootEl.querySelectorAll("[data-shot-field]").forEach(td => td.addEventListener("blur", () => {
           const i = +td.dataset.idx;
@@ -146,7 +115,7 @@ export function openProductionDrawer(pid, tab) {
           await fillSlot(p, i, f);
           render();
         }));
-        // 整体拖拽回传
+        // 整体拖拽上传
         const dz = rootEl.querySelector("[data-pd-drop]");
         if (dz) {
           wireDropZone(dz, async files => {
@@ -170,20 +139,14 @@ export function openProductionDrawer(pid, tab) {
         const t = rootEl.querySelector("#pdCopyTitle"), c = rootEl.querySelector("#pdCopyBody");
         if (t) t.addEventListener("input", () => { p.artifacts.copy.title = t.value; save("productions"); });
         if (c) c.addEventListener("input", () => { p.artifacts.copy.body = c.value; save("productions"); });
-        // 审核操作
-        const sb = rootEl.querySelector("[data-pd-submit]");
-        if (sb) sb.addEventListener("click", () => { submitForReview(p); render(); });
-        const ad = rootEl.querySelector("[data-pd-approve-deliver]");
-        if (ad) ad.addEventListener("click", async () => {
-          const ok = await confirmModal({ title: `通过并交付「${p.artifacts.copy.title || p.title}」？`, body: "审核通过后定稿入供应商端，可见可下载。", okText: "通过并交付" });
-          if (ok) { approveProduction(p); deliver(p); toast("已通过并交付入供应商端"); render(); }
-        });
-        const rj = rootEl.querySelector("[data-pd-reject]");
-        if (rj) rj.addEventListener("click", async () => { if (await rejectFlow(p)) render(); });
+        // 定稿发布（可填计划发布日期 + 备注，可跳过）
         const dl = rootEl.querySelector("[data-pd-deliver]");
         if (dl) dl.addEventListener("click", async () => {
-          const ok = await confirmModal({ title: `确认交付「${p.artifacts.copy.title || p.title}」？`, body: "定稿入供应商端，可见可下载。", okText: "交付入库" });
-          if (ok) { deliver(p); toast("已交付入库"); render(); }
+          const r = await publishModal({ title: `定稿并发布「${p.artifacts.copy.title || p.title}」` });
+          if (r == null) return;
+          const a = deliver(p, r);
+          toast(a ? `已发布 · #${String(a.pubSeq).padStart(3, "0")}${a.planDate ? ` · 计划 ${a.planDate}` : ""}` : "发布失败");
+          render();
         });
       };
       render();
@@ -206,6 +169,21 @@ export function stagePage(p) {
   return m[p.stage] || "script";
 }
 
+/* 抽屉页签 → 工作台里可编辑+重新生成的对应节点（去微调用） */
+function tabStage(p, tab) {
+  const material = p.subType === "无数字人" && p.mode === "视频";
+  switch (tab) {
+    case "script": return "script";
+    case "boards": return material ? "workshop" : "boards";
+    case "images": return "images";
+    case "prompts": return "prompts";
+    case "render": return material ? "workshop" : (p.mode === "视频" ? "render" : "review");
+    case "copy": return "copy";
+    case "review": return "review";
+    default: return stagePage(p);
+  }
+}
+
 async function fillSlot(p, idx, file) {
   const isImg = p.mode === "图文";
   const items = isImg ? p.artifacts.images.items : p.artifacts.boards.items;
@@ -223,7 +201,7 @@ async function fillSlot(p, idx, file) {
   save("productions");
   const complete = items.every(x => x.assetId);
   if (complete && p.stageStatus === "needs_input") maybeAdvanceAfterInput(p);
-  toast(`已回传 ${isImg ? "图" : "分镜"} ${i + 1}/${items.length}${complete ? " ✓ 全部就位" : ""}`);
+  toast(`已上传 ${isImg ? "图" : "分镜"} ${i + 1}/${items.length}${complete ? " ✓ 全部就位" : ""}`);
 }
 
 /* ---------- 各 Tab 内容 ---------- */
@@ -246,7 +224,7 @@ const TAB = {
         <div class="pd-units">${units.map((u, i) => {
           const jobs = jobsOf(p).filter(j => j.segIndex === i);
           const ok = jobs.some(j => j.status === "succeeded");
-          return `<div class="pd-unit ${u.needsImage ? "i2v" : "t2v"}"><b>S${String(u.scene).padStart(2, "0")}</b><span>${u.needsImage ? "图生" : "文生"} · ${u.shotIndexes.length}镜 · ${Math.ceil(u.dur)}s</span>${ok ? icon("checkCircle", 13, "ok") : `<em class="muted">未出片</em>`}</div>`;
+          return `<div class="pd-unit ${u.needsImage ? "i2v" : "t2v"}"><b>S${String(u.scene).padStart(2, "0")}${u.sceneParts > 1 ? `·${u.part}` : ""}</b><span>${u.needsImage ? "图生" : "文生"} · ${u.shotIndexes.length}镜 · ${Math.min(15, Math.ceil(u.dur))}s</span>${ok ? icon("checkCircle", 13, "ok") : `<em class="muted">未出片</em>`}</div>`;
         }).join("")}</div>
         <div class="pd-note" style="margin-top:8px"><button class="link-btn" data-pd="workbench">进工坊编排 →</button></div>`;
     }
@@ -288,29 +266,20 @@ const TAB = {
   },
 
   review(p) {
-    const r = p.review;
-    const reviewer = canReview();
+    const canPub = canDeliver();
     if (p.stage === "delivered") {
-      return `<div class="pd-review ok">${icon("checkCircle", 20)}<b>已交付</b><p>${esc(p.delivery?.name || "")} · 发布清单与供应商端可见</p></div>`;
+      return `<div class="pd-review ok">${icon("checkCircle", 20)}<b>已发布</b><p>${esc(p.delivery?.name || "")}${p.delivery?.pubSeq ? ` · #${String(p.delivery.pubSeq).padStart(3, "0")}` : ""} · 发布清单与供应商端可见</p></div>`;
     }
-    const stateLine = r.state === "approved" ? icon("checkCircle", 16) + " 审核已通过，可入供应商端"
-      : r.state === "submitted" ? icon("clock", 16) + ` 已提交，等待审核员处理${r.submittedBy ? `（${esc(r.submittedBy)} 提交）` : ""}`
-      : r.state === "rejected" ? icon("alert", 16) + " 曾被驳回，请修改后重新提交"
-      : icon("eye", 16) + " 待提交审核";
     return `
       <div class="pd-review">
         ${reviewPreviewHtml(p)}
-        <div class="pdr-state ${r.state}">${stateLine}</div>
-        ${r.notes && r.state !== "approved" ? `<div class="pdr-notes">驳回备注：${esc(r.notes)}</div>` : ""}
+        <div class="pdr-state">${icon("eye", 16)} 发布前自检：核对成片预览与文案，确认无误即可定稿发布</div>
         <div class="pdr-sum">「${esc(p.artifacts.copy.title || p.title)}」 · ${p.mode === "图文" ? `${(p.artifacts.images.items || []).filter(x => x.assetId).length} 张组图打包 zip + 文案.txt` : `${(p.artifacts.timeline || []).length} 段成片拼接${(p.artifacts.subs || []).some(s => s.text) ? " + 字幕" : ""}`}</div>
         <div class="pdr-actions">
-          ${p.stage === "review" ? (reviewer ? `
-            <button class="btn ghost" data-pd-reject>${icon("undo", 14)} 驳回</button>
-            ${r.state === "approved" ? `<button class="btn primary" data-pd-deliver>${icon("package", 14)} 交付入供应商端</button>`
-              : `<button class="btn primary" data-pd-approve-deliver>${icon("checkCircle", 14)} 通过并交付</button>`}`
-            : `<button class="btn primary" data-pd-submit>${icon("check", 14)} 提交审核</button>
-               <span class="muted">提交后由审核员通过并入供应商端</span>`)
-          : `<span class="muted">当前在「${STAGES[p.stage].label}」阶段，完成后进入审核</span>`}
+          ${p.stage === "review"
+            ? (canPub ? `<button class="btn primary" data-pd-deliver>${icon("package", 14)} 定稿并发布入供应商端</button>`
+              : `<span class="muted">当前账号无发布权限</span>`)
+            : `<span class="muted">当前在「${STAGES[p.stage].label}」阶段，完成后进入发布</span>`}
         </div>
       </div>`;
   }
@@ -319,10 +288,10 @@ const TAB = {
 function slotsTab(p, isImg) {
   const A = isImg ? p.artifacts.images : p.artifacts.boards;
   const items = A.items || [];
-  if (!items.length) return `<div class="pd-empty">${icon("image", 22)}<p>脚本起草后这里会列出${isImg ? "每张图" : "每个分镜"}的回传槽位</p></div>`;
+  if (!items.length) return `<div class="pd-empty">${icon("image", 22)}<p>脚本起草后这里会列出${isImg ? "每张图" : "每个分镜"}的上传槽位</p></div>`;
   const got = items.filter(x => x.assetId).length;
   return `
-    <div class="pd-note">站外出图回传 <b>${got}/${items.length}</b> · <button class="link-btn" data-pd-copy>${icon("copy", 13)} 复制整段提示词</button></div>
+    <div class="pd-note">站外出图上传 <b>${got}/${items.length}</b> · <button class="link-btn" data-pd-copy>${icon("copy", 13)} 复制整段提示词</button></div>
     <div class="pd-drop" data-pd-drop>
       ${icon("upload", 16)} 把图拖到这里按顺序分发（可多选）
       <input type="file" accept="image/*" multiple hidden data-pd-drop-input />

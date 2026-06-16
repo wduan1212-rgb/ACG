@@ -2,15 +2,15 @@
 
 import { $, $$, esc, gradFor } from "../core/util.js";
 import { icon } from "../ui/icons.js";
-import { save, accountById, canReview } from "../core/store.js";
+import { save, accountById, canDeliver } from "../core/store.js";
 import { AI } from "../api/ai.js";
 import { setStage } from "../domain/productions.js";
 import { urlFor } from "../domain/assets.js";
 import { deliver } from "../domain/delivery.js";
-import { toast, withLoading, confirmModal, openLightbox } from "../ui/components.js";
+import { toast, withLoading, confirmModal, openLightbox, publishModal } from "../ui/components.js";
 import { go } from "../core/router.js";
 import { stepperHtml, wireStepper } from "./studio.js";
-import { approveProduction, rejectFlow, submitForReview, reviewPreviewHtml } from "./prodDrawer.js";
+import { reviewPreviewHtml } from "./prodDrawer.js";
 
 export function renderCopyPage(root, p) {
   const acc = accountById(p.accountId);
@@ -87,7 +87,7 @@ function previewHtml(p, isImg) {
     const items = (p.artifacts.images.items || []).filter(x => x.assetId);
     return items.length
       ? `<div class="cc-grid">${items.map((it, i) => `<div class="cc-thumb"><img src="${urlFor(it.assetId)}"/><span>${i + 1}</span></div>`).join("")}</div>`
-      : `<div class="muted">还没有成图：回「成图」页回传图片，交付时整组打包。</div>`;
+      : `<div class="muted">还没有成图：回「成图」页上传图片，交付时整组打包。</div>`;
   }
   const tl = p.artifacts.timeline || [];
   const withSub = (p.artifacts.subs || []).some(s => (s.text || "").trim());
@@ -101,7 +101,7 @@ function previewHtml(p, isImg) {
 export function renderReviewPage(root, p) {
   const acc = accountById(p.accountId);
   const isImg = p.mode === "图文";
-  const reviewer = canReview();
+  const canPub = canDeliver();
   const shots = p.artifacts.script.shots || [];
   const items = (isImg ? p.artifacts.images.items : p.artifacts.boards.items) || [];
   const visuals = items.filter(x => x.assetId);
@@ -113,21 +113,17 @@ export function renderReviewPage(root, p) {
     <div class="chain-page">
       <div class="chain-main">
         <div class="page-head">
-          <div><div class="eyebrow">${reviewer ? "人工审核" : "提交审核"}</div>
-          <h2>${deliveredState ? "已交付" : reviewer ? "审核后通过并交付" : "确认无误后提交审核"}</h2></div>
+          <div><div class="eyebrow">定稿发布</div>
+          <h2>${deliveredState ? "已发布" : "确认无误后定稿并发布"}</h2></div>
           <div class="head-actions">
             ${deliveredState ? `<button class="btn ghost" id="rvToDelivery">${icon("package", 14)} 去发布清单</button>`
-            : reviewer ? `<button class="btn ghost" id="rvReject">${icon("undo", 14)} 驳回</button>
-              ${r.state === "approved" ? `<button class="btn primary" id="rvDeliver">${icon("package", 14)} 交付入供应商端</button>`
-                : `<button class="btn primary" id="rvApproveDeliver">${icon("checkCircle", 14)} 通过并交付</button>`}`
-            : `<button class="btn primary" id="rvSubmit">${icon("check", 14)} 提交审核</button>`}
+            : canPub ? `<button class="btn primary" id="rvDeliver">${icon("package", 14)} 定稿并发布入供应商端</button>`
+            : `<span class="muted">当前账号无发布权限</span>`}
           </div>
         </div>
 
-        ${deliveredState ? `<div class="review-banner ok card">${icon("checkCircle", 18)}<div><b>已交付：${esc(p.delivery?.name || "")}</b><em>发布清单与供应商端可见 · ${isImg ? "图集 zip + 文案.txt" : "成片 + 标题简介"}</em></div></div>`
-        : r.state === "approved" ? `<div class="review-banner ok card">${icon("checkCircle", 18)}<div><b>审核已通过</b><em>${reviewer ? "点右上角「交付入供应商端」完成定稿" : "等待审核员交付入库"}</em></div></div>`
-        : r.state === "submitted" ? `<div class="review-banner card">${icon("clock", 16)}<div><b>已提交，等待审核员处理${r.submittedBy ? `（${esc(r.submittedBy)} 提交）` : ""}</b><em>${reviewer ? "你可在此通过并交付，或驳回" : "审核员通过后即入供应商端"}</em></div></div>`
-        : r.notes ? `<div class="review-banner warn card">${icon("alert", 16)}<div><b>上次驳回备注</b><em>${esc(r.notes)} —— 改好后重新提交审核</em></div></div>` : ""}
+        ${deliveredState ? `<div class="review-banner ok card">${icon("checkCircle", 18)}<div><b>已发布：${esc(p.delivery?.name || "")}${p.delivery?.pubSeq ? ` · #${String(p.delivery.pubSeq).padStart(3, "0")}` : ""}</b><em>发布清单与供应商端可见 · ${isImg ? "图集 zip + 文案.txt" : "成片 + 标题简介"}</em></div></div>`
+        : `<div class="review-banner card">${icon("eye", 16)}<div><b>发布前自检</b><em>核对下方成片预览 / 脚本 / 文案，确认无误后点右上角「定稿并发布」即入供应商端</em></div></div>`}
 
         ${reviewPreviewHtml(p) ? `<section class="card review-sec">
           <div class="card-head"><b>成片预览</b><em>${isImg ? "组图配图" : "9:16 成片构成"}</em></div>
@@ -165,8 +161,8 @@ export function renderReviewPage(root, p) {
           </div>
         </div>
         <div class="side-card card hint">
-          <h3>审核说明</h3>
-          <p>通过 = 同意定稿；驳回会带备注退回对应环节重做。交付后进入发布清单，供应商端按标签可见、可批量下载。</p>
+          <h3>发布说明</h3>
+          <p>创作者自检无误后即可「定稿并发布」入供应商端，无需额外审核门槛。发布后进入发布清单按发布序号排序，供应商端按标签可见、可批量下载；管理员可在发布清单非强制地标注「已审阅」。</p>
         </div>
       </aside>
     </div>`;
@@ -174,24 +170,12 @@ export function renderReviewPage(root, p) {
   wireStepper(root);
   $$("[data-rv-img]", root).forEach(im => im.addEventListener("click", () => openLightbox(im, im.src, "")));
 
-  const sb = $("#rvSubmit", root);
-  if (sb) sb.addEventListener("click", () => { submitForReview(p); renderReviewPage(root, p); });
-  const adl = $("#rvApproveDeliver", root);
-  if (adl) adl.addEventListener("click", async () => {
-    const ok = await confirmModal({ title: `通过并交付「${p.artifacts.copy.title || p.title}」？`, body: `审核通过后定稿入供应商端（${isImg ? "图集 zip + 文案" : "成片 + 文案"}），可见可下载。`, okText: "通过并交付" });
-    if (!ok) return;
-    approveProduction(p); deliver(p);
-    toast("已通过并交付入供应商端");
-    renderReviewPage(root, p);
-  });
-  const rj = $("#rvReject", root);
-  if (rj) rj.addEventListener("click", async () => { if (await rejectFlow(p)) go("studio", p.review.returnTo || "script"); });
   const dl = $("#rvDeliver", root);
   if (dl) dl.addEventListener("click", async () => {
-    const ok = await confirmModal({ title: `交付「${p.artifacts.copy.title || p.title}」？`, body: `定稿入供应商端（${isImg ? "图集 zip + 文案" : "成片 + 文案"}），可见可下载。`, okText: "交付入库" });
-    if (!ok) return;
-    deliver(p);
-    toast("已交付入库");
+    const r = await publishModal({ title: `定稿并发布「${p.artifacts.copy.title || p.title}」` });
+    if (r == null) return;
+    const a = deliver(p, r);
+    toast(a ? `已发布入供应商端 · #${String(a.pubSeq).padStart(3, "0")}${a.planDate ? ` · 计划 ${a.planDate}` : ""}` : "发布失败");
     renderReviewPage(root, p);
   });
   const td = $("#rvToDelivery", root);

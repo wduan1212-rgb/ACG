@@ -168,6 +168,44 @@ export function buildSRT(subs) {
   return list.map((x, i) => `${i + 1}\n${srtFmt(x.start || 0)} --> ${srtFmt(x.end || 0)}\n${x.text.trim()}\n`).join("\n");
 }
 
+/* 字幕智能断句：一句口播拆成每段 ≤maxLen 字的多条，优先在标点处断，超长再硬切，
+   避免一屏出现一大段多行字幕。返回纯文本数组。 */
+export function splitCaption(text, maxLen = 18) {
+  const t = String(text || "").trim();
+  if (!t) return [];
+  if (t.length <= maxLen) return [t];
+  // 在标点后断句（标点保留在前段尾）
+  const segs = t.split(/(?<=[，。！？、；：,.!?;:…—])/).map(s => s.trim()).filter(Boolean);
+  const chunks = [];
+  for (let seg of segs) {
+    while (seg.length > maxLen) { chunks.push(seg.slice(0, maxLen)); seg = seg.slice(maxLen); }
+    if (seg) chunks.push(seg);
+  }
+  // 贪心合并相邻短块，使每条尽量接近但不超过 maxLen
+  const out = [];
+  for (const c of chunks) {
+    if (out.length && (out[out.length - 1] + c).length <= maxLen) out[out.length - 1] += c;
+    else out.push(c);
+  }
+  return out.length ? out : [t];
+}
+
+/* 把一句口播按时间区间 [start,end] 拆成多条字幕（每条 ≤maxLen 字），时长按字数比例分配 */
+export function spreadCaption(text, start, end, maxLen = 18) {
+  const chunks = splitCaption(text, maxLen);
+  const r = v => Math.round(v * 10) / 10;
+  if (chunks.length <= 1) return [{ start: r(start), end: r(end), text: chunks[0] || String(text || "").trim() }];
+  const total = chunks.reduce((a, c) => a + c.length, 0) || 1;
+  const span = Math.max(0.6 * chunks.length, end - start);
+  let t = start;
+  return chunks.map((c, i) => {
+    const d = i === chunks.length - 1 ? Math.max(0.5, end - t) : Math.max(0.5, span * c.length / total);
+    const cue = { start: r(t), end: r(t + d), text: c };
+    t += d;
+    return cue;
+  });
+}
+
 /* ---------- 通用拖拽热区 ---------- */
 export function wireDropZone(zone, handler, opts = {}) {
   if (!zone) return;
