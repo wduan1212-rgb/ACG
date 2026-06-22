@@ -1,6 +1,6 @@
 /* 创建 / 编辑账号对话框：平台/形式/类型/定位/标签 + md 批量导入 + 数字人身份板（AI 提示词流） */
 
-import { $, $$, esc, copyText, fileToDataUrl, todayStamp } from "../core/util.js";
+import { $, $$, esc, copyText, fileToDataUrl, todayStamp, wireDropZone } from "../core/util.js";
 import { icon } from "../ui/icons.js";
 import { state, save, accountById } from "../core/store.js";
 import { TAG_POOL, platformCode, createAccount, updateAccount } from "../domain/accounts.js";
@@ -78,7 +78,7 @@ export function openAccountDialog(accountId = null) {
             <div class="ad-block">
               <div class="adb-head"><b>数字人参考</b><em class="muted">角色身份版用于生成时锁定人物形象</em></div>
               <div class="ad-char-row">
-                <label class="btn ghost sm">${draft.charDataUrl || (editing && editing.charBoardAssetId) ? "✓ 已有角色版 · 点击更换" : "+ 上传角色参考版"}<input type="file" accept="image/*" hidden id="adCharUp" /></label>
+                <label class="btn ghost sm ad-char-drop" id="adCharDrop">${draft.charDataUrl || (editing && editing.charBoardAssetId) ? "✓ 已有角色版 · 点击更换 / 可拖图" : "+ 上传角色参考版 / 可拖图"}<input type="file" accept="image/*" hidden id="adCharUp" /></label>
                 ${draft.charDataUrl ? `<img class="ad-char-prev" src="${draft.charDataUrl}"/>` : ""}
               </div>
               <div class="ad-ai-board">
@@ -91,7 +91,7 @@ export function openAccountDialog(accountId = null) {
                 <pre class="ad-char-prompt" id="adCharPrompt" hidden></pre>
                 <div class="head-actions" id="adCharActs" hidden>
                   <button class="btn ghost sm" id="adCharCopy">${icon("copy", 13)} 复制整段提示词</button>
-                  <label class="btn primary sm">${icon("upload", 13)} 上传身份版<input type="file" accept="image/*" hidden id="adCharReturn" /></label>
+                  <label class="btn primary sm ad-char-drop" id="adCharReturnDrop">${icon("upload", 13)} 上传身份版 / 可拖图<input type="file" accept="image/*" hidden id="adCharReturn" /></label>
                 </div>
               </div>
             </div>` : ""}
@@ -138,10 +138,15 @@ export function openAccountDialog(accountId = null) {
           if (el) el.innerHTML = `素材命名规则：<b>${platformCode(draft.platform)}-${esc((draft.name || "账号名").replace(/\s+/g, ""))}-${draft.mode === "视频" ? esc(draft.subType) : "图文"}-001-${todayStamp()}</b>`;
         }
 
+        async function setCharBoard(file, msg = "已选择角色参考版") {
+          if (!file || !file.type.startsWith("image/")) return;
+          draft.charDataUrl = await fileToDataUrl(file);
+          draw();
+          toast(msg);
+        }
         const charUp = $("#adCharUp", root);
-        if (charUp) charUp.addEventListener("change", async e => {
-          if (e.target.files[0]) { draft.charDataUrl = await fileToDataUrl(e.target.files[0]); draw(); toast("已选择角色参考版"); }
-        });
+        if (charUp) charUp.addEventListener("change", e => setCharBoard(e.target.files[0]));
+        wireDropZone($("#adCharDrop", root), files => setCharBoard(Array.from(files).find(f => f.type.startsWith("image/")), "已拖入角色参考版"), { filesOnly: true });
         const dirDice = $("#adDirDice", root);
         if (dirDice) {
           dirDice.addEventListener("click", () => {
@@ -159,9 +164,8 @@ export function openAccountDialog(accountId = null) {
             toast("提示词已生成：复制去第三方出图，回来点「上传身份版」");
           });
           $("#adCharCopy", root).addEventListener("click", () => copyText($("#adCharPrompt", root).textContent, "已复制身份板提示词"));
-          $("#adCharReturn", root).addEventListener("change", async e => {
-            if (e.target.files[0]) { draft.charDataUrl = await fileToDataUrl(e.target.files[0]); draw(); toast("身份版已上传，将作为角色参考版"); }
-          });
+          $("#adCharReturn", root).addEventListener("change", e => setCharBoard(e.target.files[0], "身份版已上传，将作为角色参考版"));
+          wireDropZone($("#adCharReturnDrop", root), files => setCharBoard(Array.from(files).find(f => f.type.startsWith("image/")), "已拖入身份版，将作为角色参考版"), { filesOnly: true });
         }
 
         $("#adAssets", root).addEventListener("change", async e => {

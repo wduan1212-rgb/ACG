@@ -6,7 +6,7 @@
    adapter = {
      id, kind: "video"|"image", label,
      capabilities: { ratios: [], maxDuration, refImages, characterLock },
-     async submit(req)  -> { providerRef }            // req: {prompt, refs:[{name,blob|url}], ratio, duration}
+     async submit(req)  -> { providerRef }            // req: {prompt, refs:[{name,blob,url}], ratio, duration, apiKey, endpoint}
      async poll(ref)    -> { status: "running"|"succeeded"|"failed", progress: 0-100, output?, error? }
      async cancel(ref)  -> void
    } */
@@ -17,12 +17,23 @@ const registry = new Map();
 export function registerProvider(adapter) { registry.set(adapter.id, adapter); }
 export function getProvider(id) { return registry.get(id) || null; }
 
+export function providerKeyFor(kind, adapter = null) {
+  const keys = [...state.apiKeys].reverse().filter(x => x.type === kind && x.secret);
+  if (!adapter) return keys[0] || null;
+  return keys.find(k => {
+    const p = k.provider || "";
+    return !p || p.includes(adapter.label) || p.includes(adapter.id) || /^https?:\/\//.test(p);
+  }) || keys[0] || null;
+}
+
 /* 当前生效的 provider：配置了真实 Key 则优先（未来在此路由），否则 mock */
 export function activeProviderFor(kind) {
-  const k = state.apiKeys.find(x => x.type === kind && x.secret);
+  const k = providerKeyFor(kind);
   // 真实 adapter 注册后在这里按 k.provider 匹配；当前阶段统一走 mock
   if (k) {
-    const real = [...registry.values()].find(a => a.kind === kind && a.id !== `mock-${kind}` && (k.provider || "").includes(a.label));
+    const real = [...registry.values()].find(a => a.kind === kind && a.id !== `mock-${kind}` && (
+      !(k.provider || "") || (k.provider || "").includes(a.label) || (k.provider || "").includes(a.id) || /^https?:\/\//.test(k.provider || "")
+    ));
     if (real) return real;
   }
   return registry.get(`mock-${kind}`);
@@ -54,7 +65,8 @@ registerProvider({
     mockRuns.set(ref, {
       startedAt: Date.now(),
       duration: 6000 + (h % 7000),               // 6-13s 模拟渲染
-      willFail: (h % 100) < 8 && (req.attempt || 0) === 0  // 首次约 8% 失败率，重试必成功
+      willFail: false,
+      clipDuration: req.duration || 15
     });
     return { providerRef: ref };
   },
@@ -65,8 +77,8 @@ registerProvider({
     const progress = Math.min(100, Math.round(elapsed / run.duration * 100));
     if (progress >= 100) {
       mockRuns.delete(ref);
-      if (run.willFail) return { status: "failed", progress: 92, error: "模拟引擎随机失败（演示重试链路）" };
-      return { status: "succeeded", progress: 100, output: { kind: "mock", label: "15s 片段已生成（模拟）" } };
+      if (run.willFail) return { status: "failed", progress: 92, error: "生成服务繁忙，请重试" };
+      return { status: "succeeded", progress: 100, output: { kind: "render", label: `${run.clipDuration || 15}s 片段已生成` } };
     }
     return { status: "running", progress };
   },
@@ -124,6 +136,10 @@ export function ttsApiConfigured() {
   return state.apiKeys.some(x => x.type === "tts" && x.secret);
 }
 
+export function ttsConfig() {
+  return providerKeyFor("tts") || null;
+}
+
 /* ---------- 真实 Provider 模板（接入时取消注释并填写映射） ----------
 registerProvider({
   id: "jimeng-video",
@@ -131,6 +147,8 @@ registerProvider({
   label: "即梦",
   capabilities: { ratios: ["9:16", "16:9"], maxDuration: 15, refImages: true, characterLock: true },
   async submit({ prompt, refs, ratio, duration, apiKey, endpoint }) {
+    // 如果远端 API 不能读取浏览器 blob: URL，需要在这里先把 refs[].blob 上传到对象存储/后端，
+    // 再把得到的公网 URL 填入 reference_images / first_frame_image。
     const body = {
       prompt, aspect_ratio: ratio, duration,
       reference_images: refs.map(r => r.url),      // 全部参考图

@@ -6,19 +6,21 @@ import { db } from "./core/db.js";
 import { state, save, saveMembers, on, loadAll, persistNow, activeAccount, ROLE_LABEL } from "./core/store.js";
 import { pruneEmptySessions } from "./agent/orchestrator.js";
 import { migrateFromV4 } from "./core/migrate.js";
-import { preloadBlobUrls } from "./domain/assets.js";
-import { createAccount, groupOf, platChip } from "./domain/accounts.js";
+import { preloadBlobUrls, materializeStaticAssets } from "./domain/assets.js";
+import { groupOf, platChip, deleteAccount } from "./domain/accounts.js";
+import { seedDemoIfEmpty } from "./domain/demo.js";
 import { applyKeyOverrides } from "./api/llm.js";
 import "./api/providers.js";
 import { resumeJobs } from "./api/jobs.js";
 import { resumeActiveBatches } from "./agent/orchestrator.js";
 import { registerView, initRouter, render, go, parseHash } from "./core/router.js";
-import { toast, openPalette, toggleNotifyPanel, updateNotifyBadge } from "./ui/components.js";
+import { toast, confirmModal, openPalette, toggleNotifyPanel, updateNotifyBadge } from "./ui/components.js";
 import { overviewView } from "./views/overview.js";
 import { agentView } from "./agent/view.js";
 import { studioView } from "./views/studio.js";
 import { assetsView } from "./views/assetsView.js";
 import { deliveryView } from "./views/deliveryView.js";
+import { analyticsView } from "./views/analyticsView.js";
 import { draftsView } from "./views/draftsView.js";
 import { settingsView } from "./views/settings.js";
 import "./views/accountDialog.js";
@@ -27,15 +29,7 @@ import { productionsOf } from "./domain/productions.js";
 
 /* ---------- 种子数据（首次使用且无迁移数据时） ---------- */
 function seedIfEmpty() {
-  if (state.accounts.length) return;
-  const seeds = [
-    { name: "Dumate 图文教程 01", platform: "小红书", mode: "图文", position: "办公效率教程，围绕 Dumate 文件整理 / 数据分析等功能，少广告腔、强操作演示", qtags: ["职场效率", "产品功能"] },
-    { name: "AI 办公口播号", platform: "视频号", mode: "视频", subType: "数字人", position: "数字人出镜讲职场效率，前段真人引入、后段产品演示，定位真实办公痛点", qtags: ["职场效率"] },
-    { name: "ACG 探场官", platform: "小红书", mode: "视频", subType: "无数字人", position: "探场体验官人设，现场探店 + 产品功能演示结合，活动现场素材二次创作", qtags: ["创作者", "测评中立"] }
-  ];
-  seeds.forEach(s => createAccount(s));
-  state.ui.activeAccountId = state.accounts[0].id;
-  save("accounts", "meta");
+  seedDemoIfEmpty();
 }
 
 /* ---------- 登录（成员账号制：用户名 + 口令） ---------- */
@@ -44,7 +38,9 @@ function showGate() {
   gate.hidden = false;
   document.body.classList.add("gated");
   const u = $("#lgUser"), p = $("#lgPin");
-  if (u) u.value = ""; if (p) p.value = "";
+  if (u) u.value = "yuxuan"; if (p) p.value = "acg123";
+  const hint = $("#lgHint");
+  if (hint) hint.textContent = "演示管理员账号：yuxuan / acg123";
   setTimeout(() => u && u.focus(), 80);
 }
 function applyRoleClasses() {
@@ -105,6 +101,8 @@ function renderContextPanel() {
     { key: "真人 · 数字人", list: state.accounts.filter(a => a.mode === "视频" && a.subType === "数字人" && f(a)) },
     { key: "素材 · 无数字人", list: state.accounts.filter(a => a.mode === "视频" && a.subType !== "数字人" && f(a)) }
   ];
+  const oldGroups = $(".ctx-groups", panel);
+  const oldScrollTop = oldGroups ? oldGroups.scrollTop : 0;
   panel.innerHTML = `
     <div class="ctx-head">
       <b>账号矩阵</b>
@@ -117,15 +115,18 @@ function renderContextPanel() {
         return `<div class="ctx-group">
           <button class="ctx-gtitle" data-g="${esc(g.key)}"><span class="chev ${collapsed ? "closed" : ""}">${icon("chevronDown", 12)}</span>${esc(g.key)}<em>${g.list.length}</em></button>
           ${collapsed ? "" : g.list.map(a => `
-            <button class="ctx-acc ${a.id === state.ui.activeAccountId ? "is-active" : ""}" data-acc="${a.id}">
+            <div class="ctx-acc ${a.id === state.ui.activeAccountId ? "is-active" : ""}" data-acc="${a.id}" role="button" tabindex="0">
               <span class="dot" style="background:${gradFor(a.name)}"></span>
               <span class="ctx-name">${esc(a.name)}</span>
               ${platChip(a.platform, true)}
               <em>${a.monthlyDone || 0}</em>
-            </button>`).join("")}
+              ${state.role === "admin" ? `<button class="ctx-del" data-ctx-del="${a.id}" title="删除账号">${icon("trash", 12)}</button>` : ""}
+            </div>`).join("")}
         </div>`;
       }).join("")}
     </div>`;
+  const newGroups = $(".ctx-groups", panel);
+  if (newGroups) newGroups.scrollTop = oldScrollTop;
   $("#ctxNew").addEventListener("click", () => document.dispatchEvent(new CustomEvent("open-account-dialog", { detail: {} })));
   $("#ctxSearch").addEventListener("input", e => { panel.dataset.q = e.target.value; renderContextPanel(); setTimeout(() => { const i = $("#ctxSearch"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 0); });
   $$(".ctx-gtitle", panel).forEach(b => b.addEventListener("click", () => {
@@ -133,17 +134,38 @@ function renderContextPanel() {
     state.ui.collapsedGroups = [...collapsedGroups]; save("meta");
     renderContextPanel();
   }));
-  $$(".ctx-acc", panel).forEach(b => b.addEventListener("click", () => {
-    state.ui.activeAccountId = b.dataset.acc;
-    state.ui.activeProductionId = null;
-    save("meta");
-    go("studio");
+  $$(".ctx-del", panel).forEach(b => b.addEventListener("click", async e => {
+    e.stopPropagation();
+    const acc = state.accounts.find(a => a.id === b.dataset.ctxDel);
+    if (!acc) return;
+    const ok = await confirmModal({
+      title: "删除账号",
+      body: `确定删除「${esc(acc.name)}」吗？对应任务与素材会一并移除。`,
+      okText: "删除",
+      danger: true
+    });
+    if (!ok) return;
+    deleteAccount(acc.id);
+    renderContextPanel();
     render();
   }));
+  $$(".ctx-acc", panel).forEach(b => {
+    const open = () => {
+      state.ui.activeAccountId = b.dataset.acc;
+      state.ui.activeProductionId = null;
+      save("meta");
+      go("studio");
+      render();
+    };
+    b.addEventListener("click", e => { if (!e.target.closest(".ctx-del")) open(); });
+    b.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  });
 }
 
 /* ---------- 顶栏 ---------- */
-const ZONE_TITLE = { overview: "首页", agent: "批量创作", studio: "单号创作", assets: "整体资产", drafts: "草稿箱", delivery: "发布清单", settings: "设置" };
+const ZONE_TITLE = { overview: "首页", agent: "批量创作", studio: "单号创作", assets: "整体资产", drafts: "草稿箱", delivery: "发布清单", analytics: "数据分析", settings: "设置" };
 function renderTopbar() {
   const zone = document.body.dataset.zone;
   const bc = $("#topCrumb");
@@ -163,6 +185,7 @@ function paletteCommands() {
     { label: "整体资产", group: "导航", icon: "folder", run: () => go("assets") },
     { label: "草稿箱", group: "导航", icon: "inbox", run: () => go("drafts") },
     { label: "发布清单", group: "导航", icon: "package", run: () => go("delivery") },
+    { label: "数据分析", group: "导航", icon: "pulse", run: () => go("analytics") },
     ...(state.role === "admin" ? [
       { label: "设置", group: "导航", icon: "gear", run: () => go("settings") },
       { label: "创建账号", group: "操作", icon: "plus", run: () => document.dispatchEvent(new CustomEvent("open-account-dialog", { detail: {} })) }
@@ -192,6 +215,7 @@ async function boot() {
     }
     await preloadBlobUrls();
     seedIfEmpty();
+    await materializeStaticAssets();
     pruneEmptySessions();
     applyKeyOverrides(state.apiKeys);
 
@@ -202,6 +226,7 @@ async function boot() {
     registerView("assets", assetsView);
     registerView("drafts", draftsView);
     registerView("delivery", deliveryView);
+    registerView("analytics", analyticsView);
     registerView("settings", settingsView);
     initRouter();
 

@@ -2,7 +2,7 @@
 
 import { esc, gradFor, timeAgo } from "../core/util.js";
 import { icon, agentAvatar } from "../ui/icons.js";
-import { state, accountById, canDeliver } from "../core/store.js";
+import { state, save, accountById, canDeliver } from "../core/store.js";
 import { platChip, groupOf, tagsOf, TAG_POOL } from "../domain/accounts.js";
 import { STAGES, flowOf, normalizeStage, stageDone, statusPill, jobsOf } from "../domain/productions.js";
 import { batchById, batchProds, currentSessionBatches } from "./orchestrator.js";
@@ -21,6 +21,44 @@ export function renderMessage(m) {
   </div>`;
 }
 
+function isPureAccountSelectionText(text) {
+  const s = String(text || "").trim();
+  if (/[「"]/.test(s) || /主题|关于|围绕|做一?期|出一?期|发一?条/.test(s)) return false;
+  return /^(随机)?(选择|选|挑|找|找出|匹配|帮我选|帮我找|给我找|选出|安排|来)\s*([0-9两一二三四五六七八九十]+|一些|几个|几|一批|若干)?\s*(个|条|只|家)?\s*(账号|号|图文号|图文账号|素材号|素材账号|真人号|真人账号|数字人号|数字人账号)/.test(s);
+}
+
+function zhCount(text) {
+  const m = String(text || "").match(/([0-9]+|[两一二三四五六七八九十]+)\s*(个|条|只|家)?\s*(账号|号|图文号|图文账号|素材号|素材账号|真人号|真人账号|数字人号|数字人账号)/);
+  if (!m) return null;
+  if (/^[0-9]+$/.test(m[1])) return parseInt(m[1], 10);
+  const d = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (m[1] === "十") return 10;
+  const ten = m[1].match(/^([一二三四五六七八九])?十([一二三四五六七八九])?$/);
+  if (ten) return (ten[1] ? d[ten[1]] : 1) * 10 + (ten[2] ? d[ten[2]] : 0);
+  return d[m[1]] || null;
+}
+
+function normalizeSelectionPlan(p) {
+  if (!p || p.status !== "pending" || !isPureAccountSelectionText(p.goal || "")) return false;
+  let changed = false;
+  const goal = p.goal || "";
+  const group = goal.includes("图文") ? "图文组" : (goal.includes("真人") || goal.includes("数字人")) ? "真人" : (goal.includes("素材") || goal.includes("无数字人")) ? "素材" : p.group || "all";
+  const explicitTags = TAG_POOL.filter(t => goal.includes(t) || goal.includes(t.slice(0, 2)));
+  if (p.topic || p.topicMode !== "random") { p.topic = ""; p.topicMode = "random"; changed = true; }
+  if (group !== p.group) { p.group = group; changed = true; }
+  if (!explicitTags.length && (p.tags || []).length) { p.tags = []; changed = true; }
+  else if (explicitTags.length && explicitTags.join("|") !== (p.tags || []).join("|")) { p.tags = explicitTags; changed = true; }
+  const want = zhCount(goal);
+  let matched = state.accounts.filter(a =>
+    (p.group === "all" || groupOf(a) === p.group) &&
+    (!(p.tags || []).length || (p.tags || []).some(t => tagsOf(a).includes(t)))
+  );
+  if (want > 0 && want < matched.length && !(p.accountIds || []).length) matched = matched.slice(0, want);
+  const nextIds = matched.map(a => a.id);
+  if (!(p.accountIds || []).length || (p.accountIds || []).some(id => !nextIds.includes(id))) { p.accountIds = nextIds; changed = true; }
+  return changed;
+}
+
 const CARD = {
   text(m) {
     return `<div class="ag-bubble agent">${esc(m.payload.text).replace(/\n/g, "<br/>")}</div>`;
@@ -29,6 +67,7 @@ const CARD = {
   /* 计划卡：确认前可改主题/风格/标签/选号 */
   plan(m) {
     const p = m.payload;
+    if (normalizeSelectionPlan(p)) save("sessions");
     const matched = (p.accountIds || []).map(accountById).filter(Boolean);
     const confirmed = p.status === "confirmed";
     const cancelled = p.status === "cancelled";

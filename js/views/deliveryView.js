@@ -7,9 +7,22 @@ import { state, save, notify, accountById, productionById, canMarkReviewed } fro
 import { platChip, modeLabel, PLATFORM_CODE } from "../domain/accounts.js";
 import { deliveredAssets, downloadDelivery, batchDownload, toggleAdminReviewed } from "../domain/delivery.js";
 import { urlFor } from "../domain/assets.js";
+import { ensureAnalyticsForAsset, isAnalyticsSupported, refreshAnalyticsLink } from "../domain/analytics.js";
 import { openProductionDrawer } from "./prodDrawer.js";
 import { emptyState, toast, openLightbox, promptModal } from "../ui/components.js";
 import { copyText } from "../core/util.js";
+
+function extractUrl(text) {
+  const m = String(text || "").match(/https?:\/\/[^\s"'<>，。；、）】]+/);
+  return m ? m[0].trim() : "";
+}
+
+function extractShareTitle(text) {
+  const body = (String(text || "").match(/【([^】]+)】/) || [])[1] || "";
+  if (!body) return "";
+  const beforeSource = body.split(/\s*[|｜]\s*小红书/)[0] || body;
+  return beforeSource.split(/\s+-\s+/)[0].replace(/^\d+\s*/, "").trim();
+}
 
 function deliveredItemHtml(asset, acc, i) {
   const isImg = asset.type === "图集";
@@ -45,19 +58,31 @@ function deliveredItemHtml(asset, acc, i) {
 }
 
 async function returnLinkFlow(asset, acc, redraw) {
-  const url = await promptModal({
+  const raw = await promptModal({
     title: `回传发布链接 · ${asset.name}`,
-    placeholder: `粘贴${acc?.platform || "平台"}笔记/视频链接（https:// 开头）`,
+    placeholder: `粘贴${acc?.platform || "平台"}链接，或整段分享文案`,
     value: asset.publishedUrl || "", okText: "确认回传"
   });
-  if (url == null) return;
-  if (!/^https?:\/\/\S+/.test(url)) { toast("链接格式不对：需要 https:// 开头的完整链接"); return; }
+  if (raw == null) return;
+  const url = extractUrl(raw);
+  if (!url) { toast("没有识别到链接：请粘贴包含 http:// 或 https:// 的分享内容"); return; }
+  const shareTitle = extractShareTitle(raw);
   asset.publishedUrl = url;
+  if (shareTitle) asset.publishedTitle = shareTitle;
+  asset.publishedRawText = String(raw || "").slice(0, 500);
   asset.publishedAt = Date.now();
   asset.status = "已发布";
   save("assets");
   notify("delivery", `「${asset.title || asset.name}」已发布`, `供应商回传了发布链接，链路闭环 ✓`);
-  toast("已记录发布链接，素材标记为「已发布」");
+  const link = ensureAnalyticsForAsset(asset, acc);
+  if (link && isAnalyticsSupported(link.url, link.platform)) {
+    refreshAnalyticsLink(link.id).then(snap => {
+      if (snap) notify("analytics", "小红书数据已完成首次检测", `${asset.title || asset.name} 已进入数据分析看板`);
+    });
+    toast("已记录发布链接，素材标记为「已发布」，数据检测已排队");
+  } else {
+    toast("已记录发布链接，素材标记为「已发布」");
+  }
   redraw();
 }
 

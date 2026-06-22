@@ -7,6 +7,7 @@ import { AI } from "../api/ai.js";
 import { buildSbExternalPrompt, buildImgExternalPrompt, buildSbExternalGroups } from "../api/prompts.js";
 import { groupOf, tagsOf, TAG_POOL, createAccount } from "../domain/accounts.js";
 import { createProduction, setStage, setStatus, normalizeVideoTimes, segmentsForGen, autoAssemble, jobsOf, isMaterial, estimateAudio, buildMaterialUnits } from "../domain/productions.js";
+import { applyDemoProduction } from "../domain/demo.js";
 import { createRenderJobsFor, retryJob, createJob } from "../api/jobs.js";
 import { deliver } from "../domain/delivery.js";
 import { addAssetFromDataUrl, addAssetFromFile } from "../domain/assets.js";
@@ -122,9 +123,9 @@ export function createBatch(plan, sessionId) {
 
 /* 固定流程模板：一键发起规定动作（主题每号随机、风格用账号自带创作风格） */
 export const FLOW_TEMPLATES = {
-  notes: { label: "全部图文号 · 出一批笔记", group: "图文组", icon: "image", desc: "每号随机主题 · 风格用账号自带 · 站外出图上传" },
-  material: { label: "全部素材号 · 全自动出片", group: "素材", icon: "layers", desc: "随机主题 → 口播音频 → 逐镜头视频 → 智能混剪，无需人工上传" },
-  dh: { label: "全部真人号 · 出口播视频", group: "真人", icon: "user", desc: "每号随机主题 · 两段式提示词 · 分镜上传后自动渲染" }
+  notes: { label: "图文演示 · 叮叮Ding办公", group: "图文组", icon: "image", desc: "预设 6 张图文素材 · 自动进入文案与定稿" },
+  dh: { label: "真人视频演示 · 李南南", group: "真人", icon: "user", desc: "真人口播 → 两段生成 → 自动字幕 → 待定稿" },
+  material: { label: "素材视频演示 · 阿石聊AI", group: "素材", icon: "layers", desc: "展台素材混剪 → 口播估时 → 智能混剪 + 字幕 + BGM" }
 };
 export function templatePlan(key) {
   const t = FLOW_TEMPLATES[key];
@@ -151,6 +152,7 @@ export function matchAccounts({ tags = [], group = "all" }) {
 async function draftOne(p, batch) {
   const acc = accountById(p.accountId);
   if (!acc) { setStatus(p, "failed", "账号不存在"); return; }
+  if (applyDemoProduction(p, { batch: true })) return;
   const isImg = p.mode === "图文";
   const material = isMaterial(p);
   try {
@@ -226,7 +228,7 @@ export function createUnitVideoJobs(p, onlyUnitIndex = null) {
     if (onlyUnitIndex != null && i !== onlyUnitIndex) return;
     if (onlyUnitIndex == null && state.jobs.some(j => j.productionId === p.id && j.segIndex === i && j.status === "succeeded")) return;
     if (!u.videoPrompt) return;
-    const refs = [u.imageAssetId, u.refAssetId, u.needsImage ? sharedRef : null].filter(Boolean);
+    const refs = [...new Set([u.imageAssetId, ...(u.refAssetIds || []), u.refAssetId, u.needsImage ? sharedRef : null].filter(Boolean))].slice(0, 5);
     createJob({
       kind: "video", productionId: p.id, segIndex: i,
       segName: `场景${String(u.scene).padStart(2, "0")}${u.shotIndexes.length > 1 ? `·${u.shotIndexes.length}镜` : ""}`,
@@ -455,14 +457,17 @@ export function resumeActiveBatches() {
 }
 
 /* ---------- 媒体路由：对话区拖图 → 顺序分发到等待上传的任务 ---------- */
-export async function routeMediaFiles(files) {
+export async function routeMediaFiles(files, batchId = null) {
   const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
   const vids = Array.from(files).filter(f => f.type.startsWith("video/"));
   const out = { assigned: 0, tasks: 0, extra: 0, videos: vids.length };
   if (imgs.length) {
-    const targets = state.productions.filter(p => p.stageStatus === "needs_input" &&
-      ((p.mode === "图文" ? p.artifacts.images.items : p.artifacts.boards.items) || []).some(x => !x.assetId))
-      .sort((a, b) => a.createdAt - b.createdAt);
+    const hasGap = p => ((p.mode === "图文" ? p.artifacts.images.items : p.artifacts.boards.items) || []).some(x => !x.assetId);
+    // 从某个批次的上传区拖入 → 只分发到该批次的任务，且按看板/卡片显示顺序填，避免跑到别的账号/会话上
+    const b = batchId ? batchById(batchId) : null;
+    const targets = b
+      ? batchProds(b).filter(p => p.stageStatus === "needs_input" && hasGap(p))
+      : state.productions.filter(p => p.stageStatus === "needs_input" && hasGap(p)).sort((a, b2) => a.createdAt - b2.createdAt);
     let fi = 0;
     for (const p of targets) {
       if (fi >= imgs.length) break;
@@ -512,6 +517,12 @@ export function contextSummary() {
 export function think(step) { emit("agent:think", step); }
 const INTENT_LABEL = { plan_batch: "拆解量产计划", create_accounts: "批量建号", run_generation: "派发生成任务", approve_all: "批量过审", deliver_all: "批量交付", retry_failed: "重试失败项", status_query: "汇总当前进度", chat: "查阅数据后回答" };
 
+function isPureAccountSelection(text) {
+  const s = text.trim();
+  if (/[「"]/.test(s) || /主题|关于|围绕|做一?期|出一?期|发一?条/.test(s)) return false;
+  return /^(随机)?(选择|选|挑|找|找出|匹配|帮我选|帮我找|给我找|选出|安排|来)\s*([0-9两一二三四五六七八九十]+|一些|几个|几|一批|若干)?\s*(个|条|只|家)?\s*(账号|号|图文号|图文账号|素材号|素材账号|真人号|真人账号|数字人号|数字人账号)/.test(s);
+}
+
 export async function handleUserText(text) {
   const session = ensureSession();
   addMsg(session, { role: "user", type: "text", payload: { text } });
@@ -560,9 +571,21 @@ export async function handleUserText(text) {
       return;
     }
     if (r.intent === "plan_batch") {
-      const params = r.params.topic ? r.params : parseGoalFallback(text);
+      const fb = parseGoalFallback(text);
+      const params = r.params.topic ? { ...r.params } : { ...fb };
+      // 分组 + 数量以文本规则为准（更可靠，兜底 LLM 误判 group=all 或漏数量）
+      if (fb.group && fb.group !== "all") params.group = fb.group;
+      if (fb.count != null) params.count = fb.count;
+      // 纯选号指令（选 / 随机选 N个…号/账号）不要把整句当主题 → 每号随机主题
+      if (isPureAccountSelection(text)) params.topic = "";
       think("按标签 / 分组匹配账号矩阵…");
-      const matched = matchAccounts(params);
+      let matched = matchAccounts(params);
+      // 指定数量：随机抽取 N 个（"随机选10个不太一样的"）
+      const want = Number(params.count);
+      if (want > 0 && want < matched.length) {
+        matched = [...matched].sort(() => Math.random() - 0.5).slice(0, want);
+        think(`按指令随机抽取 ${want} 个账号`);
+      }
       think(`命中 ${matched.length} 个账号 · 生成计划卡`);
       const wantsRandom = /随机主题|各自主题|主题随机/.test(text) || !params.topic;
       addMsg(session, {
@@ -579,7 +602,7 @@ export async function handleUserText(text) {
     // chat
     try {
       const reply = await AI.chat([
-        { role: "system", content: `你是「量产 Agent」，一个内容生产工作台的调度助手。工作台能力：按账号定位批量起草脚本/图卡 → 站外出图上传 → （视频）模拟渲染 → 智能剪辑+字幕 → 人工审核 → 定稿交付。当前状态：${contextSummary()}。用简洁中文回答，不要 markdown 标题，必要时给出下一步建议（如「说出主题即可发起量产」）。` },
+        { role: "system", content: `你是「量产 Agent」，一个内容生产工作台的调度助手。工作台能力：按账号定位批量起草脚本/图卡 → 站外出图上传 → 视频渲染 → 智能剪辑+字幕 → 人工审核 → 定稿交付。当前状态：${contextSummary()}。用简洁中文回答，不要 markdown 标题，必要时给出下一步建议（如「说出主题即可发起量产」）。` },
         { role: "user", content: text }
       ]);
       agentSay(reply || statusText());

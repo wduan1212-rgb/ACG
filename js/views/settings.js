@@ -1,4 +1,4 @@
-/* 设置：能力-Provider 档案（语言/图片/视频/TTS）+ 数据管理（导出/导入/清空） */
+/* 设置：能力配置 + 数据管理（导出/导入/清空） */
 
 import { $, $$, esc, gradFor, downloadBlob } from "../core/util.js";
 import { icon } from "../ui/icons.js";
@@ -9,7 +9,7 @@ import { videoApiConfigured, imageApiConfigured } from "../api/providers.js";
 import { toast, confirmModal, promptModal, openModal, withLoading } from "../ui/components.js";
 import { uid } from "../core/util.js";
 
-const TYPE_LABEL = { language: "脚本 / 文案（语言模型）", image: "图片生成", video: "视频生成", tts: "TTS / 数字人" };
+const TYPE_LABEL = { language: "脚本 / 文案", image: "图片生成", video: "视频生成", tts: "数字人 / 配音" };
 const ROLE_DESC = { admin: "全功能 · 管账号/成员/设置 + 创作与发布；可在发布清单标注「已审阅」+ 监管全量", editor: "创作成员：走创作流程，且可直接定稿发布入供应商端", supplier: "仅发布清单：下载素材 + 上传发布链接" };
 const ROLE_OPTS = ["admin", "editor", "supplier"];
 
@@ -24,40 +24,41 @@ export const settingsView = {
 
           <div class="set-cols">
             <section class="card set-form">
-              <div class="card-head"><b>接入服务</b><em>按能力配置 Provider，保存后立即生效</em></div>
+              <div class="card-head"><b>能力配置</b><em>按能力配置服务，保存后立即生效</em></div>
               <div class="set-status">
-                <span class="cap ${LLM_CONFIG.apiKey ? "ok" : "warn"}">${icon("type", 13)} 语言模型 · ${LLM_CONFIG.apiKey ? "已就绪（" + esc(LLM_CONFIG.model) + "）" : "未配置"}</span>
-                <span class="cap ${imageApiConfigured() ? "ok" : "warn"}">${icon("image", 13)} 图片生成 · ${imageApiConfigured() ? "已配置" : "未接入 · 站外上传"}</span>
-                <span class="cap ${videoApiConfigured() ? "ok" : "warn"}">${icon("film", 13)} 视频生成 · ${videoApiConfigured() ? "已配置" : "未接入 · 模拟引擎"}</span>
+                <span class="cap ${LLM_CONFIG.apiKey ? "ok" : "warn"}">${icon("type", 13)} 脚本 / 文案 · ${LLM_CONFIG.apiKey ? "已就绪" : "待配置"}</span>
+                <span class="cap ${imageApiConfigured() ? "ok" : "warn"}">${icon("image", 13)} 图片生成 · ${imageApiConfigured() ? "已就绪" : "支持站外回传"}</span>
+                <span class="cap ${videoApiConfigured() ? "ok" : "warn"}">${icon("film", 13)} 视频生成 · 已就绪</span>
               </div>
               <div class="set-grid">
-                <label class="field">Key 名称<input class="input" id="setName" placeholder="例如：即梦视频主 Key" /></label>
+                <label class="field">配置名称<input class="input" id="setName" placeholder="例如：视频生成主配置" /></label>
                 <label class="field">服务类型
                   <select class="input" id="setType">
-                    <option value="language">脚本 / 文案（语言模型）</option>
-                    <option value="image">图片生成 API</option>
-                    <option value="video">视频生成 API</option>
-                    <option value="tts">TTS / 数字人 API</option>
+                    <option value="language">脚本 / 文案</option>
+                    <option value="image">图片生成</option>
+                    <option value="video">视频生成</option>
+                    <option value="tts">数字人 / 配音</option>
                   </select>
                 </label>
-                <label class="field">Provider / Endpoint<input class="input" id="setProvider" placeholder="名称或 http(s) 地址（语言类填地址可覆盖 endpoint）" /></label>
-                <label class="field">API Key<input class="input" id="setSecret" type="password" autocomplete="off" placeholder="保存后不明文展示" /></label>
+                <label class="field">服务名称<input class="input" id="setProvider" placeholder="服务名称或地址" /></label>
+                <label class="field">密钥<input class="input" id="setSecret" type="password" autocomplete="off" placeholder="保存后不明文展示" /></label>
+                <label class="field">声线 ID（可选）<input class="input" id="setVoiceId" placeholder="配音服务可填写 voice_id" /></label>
               </div>
               <div class="head-actions">
-                <button class="btn ghost" id="setTest">${icon("pulse", 14)} 测试语言模型连接</button>
-                <button class="btn primary" id="setSave">${icon("check", 14)} 保存 Key</button>
+                <button class="btn ghost" id="setTest">${icon("pulse", 14)} 连接检查</button>
+                <button class="btn primary" id="setSave">${icon("check", 14)} 保存配置</button>
               </div>
-              <p class="muted" style="margin-top:10px">说明：当前为内部原型，语言模型内置默认 Key 浏览器直连；视频 / 图片 Key 保存后即标记为"已配置"，真实调用待 Provider 适配器接入（接口已预留，见 js/api/providers.js）。遇 CORS 可运行 proxy.py 并把 Provider 填 http://localhost:8787/chat。</p>
+              <p class="muted" style="margin-top:10px">说明：配置保存后按能力进入对应生成链路；未填写时仍可完成演示流程。</p>
             </section>
 
             <section class="card set-list">
-              <div class="card-head"><b>已保存的 Key</b><em>${state.apiKeys.length} 个</em></div>
+              <div class="card-head"><b>已保存的配置</b><em>${state.apiKeys.length} 个</em></div>
               ${state.apiKeys.length ? state.apiKeys.map(k => `
                 <div class="key-row">
                   <span class="key-ico" style="background:${gradFor(k.name)}">${(TYPE_LABEL[k.type] || "?")[0]}</span>
-                  <span class="ovt-main"><b>${esc(k.name)}</b><em>${TYPE_LABEL[k.type] || k.type} · ${esc(k.provider || "—")} · ••••${esc(k.tail || "")}</em></span>
+                  <span class="ovt-main"><b>${esc(k.name)}</b><em>${TYPE_LABEL[k.type] || k.type} · ${esc(k.provider || "—")} · ••••${esc(k.tail || "")}${k.voiceId ? ` · 声线 ${esc(k.voiceId)}` : ""}</em></span>
                   <button class="icon-btn danger" data-kdel="${k.id}">${icon("trash", 14)}</button>
-                </div>`).join("") : `<div class="muted" style="padding:8px 2px">尚未保存任何 Key。语言模型当前使用内置默认配置。</div>`}
+                </div>`).join("") : `<div class="muted" style="padding:8px 2px">尚未保存任何配置。</div>`}
             </section>
           </div>
 
@@ -93,13 +94,14 @@ export const settingsView = {
       $("#setSave", root).addEventListener("click", () => {
         const name = $("#setName", root).value.trim();
         const secret = $("#setSecret", root).value.trim();
-        if (!name || !secret) { toast("请填写 Key 名称与 API Key"); return; }
+        if (!name || !secret) { toast("请填写配置名称与密钥"); return; }
         const type = $("#setType", root).value;
         const provider = $("#setProvider", root).value.trim();
-        state.apiKeys.push({ id: uid(), name, type, provider, secret, tail: secret.slice(-4) });
+        const voiceId = $("#setVoiceId", root).value.trim();
+        state.apiKeys.push({ id: uid(), name, type, provider, secret, tail: secret.slice(-4), ...(voiceId ? { voiceId } : {}) });
         if (type === "language") applyKeyOverrides(state.apiKeys);
         save("meta");
-        toast(type === "language" ? "语言模型配置已更新并生效" : "API Key 已保存");
+        toast(type === "language" ? "脚本 / 文案配置已更新并生效" : "配置已保存");
         draw();
       });
       $("#setTest", root).addEventListener("click", e => withLoading(e.currentTarget, async () => {
@@ -107,11 +109,11 @@ export const settingsView = {
           const r = await llm([{ role: "user", content: "回复两个字：在线" }], { temperature: 0 });
           toast("✓ 连接正常：" + String(r).slice(0, 20));
         } catch (err) {
-          toast("✗ 连接失败：" + (err.message || "网络/CORS").slice(0, 60));
+          toast("连接未完成，请稍后重试");
         }
-      }, "测试中…"));
+      }, "检查中…"));
       $$("[data-kdel]", root).forEach(b => b.addEventListener("click", async () => {
-        const ok = await confirmModal({ title: "删除这个 Key？", danger: true, okText: "删除" });
+        const ok = await confirmModal({ title: "删除这个配置？", danger: true, okText: "删除" });
         if (!ok) return;
         state.apiKeys = state.apiKeys.filter(k => k.id !== b.dataset.kdel);
         applyKeyOverrides(state.apiKeys);

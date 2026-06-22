@@ -13,6 +13,10 @@ export const state = {
   batches: [],
   jobs: [],
   notifications: [],
+  analyticsLinks: [],
+  metricSnapshots: [],
+  insightReports: [],
+  creativeMemory: [],
   apiKeys: [],                // 存于 meta
   ui: {
     activeAccountId: null,

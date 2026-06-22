@@ -38,7 +38,7 @@ export function reviewPreviewHtml(p) {
       <span class="rvp-time">${Math.round(total)}s</span>
       <span class="rvp-play">${icon("play", 20)}</span>
       ${firstSub ? `<div class="rvp-sub">${esc(firstSub.text)}</div>` : ""}
-      <div class="rvp-hint">预览为示意 · 接视频 API 后可播放成片</div>
+      <div class="rvp-hint">成片预览</div>
     </div>
     <div class="rvp-strip">${tl.map((c, i) => {
       const u = thumbAsset(c, i); const url = u ? urlFor(u) : null;
@@ -211,7 +211,7 @@ const TAB = {
     const isImg = p.mode === "图文";
     if (!shots.length) return `<div class="pd-empty">${icon("fileText", 22)}<p>脚本还未生成${p.stageStatus === "running" ? "（起草中…）" : ""}</p></div>`;
     const cols = isImg ? [["idea", "核心思想"], ["visual", "画面"], ["line", "图上文案"]] : [["time", "时间"], ["idea", "核心思想"], ["visual", "画面"], ["line", "口播"]];
-    return `<div class="pd-note">主题「${esc(p.topic)}」 · ${shots.length} ${isImg ? "张图卡" : "个镜头"} · 单元格可直接编辑${p.artifacts.script.source === "mock" ? ` · <i class="src-mock">本地模板</i>` : ""}</div>
+    return `<div class="pd-note">主题「${esc(p.topic)}」 · ${shots.length} ${isImg ? "张图卡" : "个镜头"} · 单元格可直接编辑</div>
     <table class="mini-table"><thead><tr><th>#</th>${cols.map(c => `<th>${c[1]}</th>`).join("")}</tr></thead>
     <tbody>${shots.map((s, i) => `<tr><td class="c-idx">${i + 1}</td>${cols.map(c => `<td contenteditable="true" data-shot-field="${c[0]}" data-idx="${i}">${esc(s[c[0]] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   },

@@ -1,9 +1,10 @@
 /* JobRunner：生成任务队列（持久化 / 并发 2 / 轮询 / 重试 / 取消 / 刷新恢复）
    所有"生成"动作（站内视频、站内图片）都经由 job，UI 订阅 job 事件渲染状态 */
 
-import { state, save, emit, productionById, notify } from "../core/store.js";
+import { state, save, emit, productionById, notify, assetById } from "../core/store.js";
 import { uid } from "../core/util.js";
-import { activeProviderFor } from "./providers.js";
+import { activeProviderFor, providerKeyFor, getProvider } from "./providers.js";
+import { assetBlob, urlFor } from "../domain/assets.js";
 
 const CONCURRENCY = 2;
 const POLL_MS = 700;
@@ -77,22 +78,72 @@ async function tick() {
       if (!p) { failJob(j, "未注册可用的生成服务"); continue; }
       try {
         j.attempts++;
-        const { providerRef } = await p.submit({ prompt: j.prompt, refs: [], ratio: j.ratio, duration: j.duration, attempt: j.attempts - 1 });
+        const refs = await refsForJob(j);
+        const key = providerKeyFor(j.kind, p);
+        const endpoint = /^https?:\/\//.test(key?.provider || "") ? key.provider : key?.endpoint || "";
+        const { providerRef } = await p.submit({
+          prompt: j.prompt, refs, ratio: j.ratio, duration: j.duration,
+          attempt: j.attempts - 1,
+          apiKey: key?.secret || "",
+          endpoint,
+          providerConfig: key || null
+        });
         j.provider = p.id; j.providerRef = providerRef;
         j.status = "submitted"; j.progress = 1; j.updatedAt = Date.now();
         save("jobs"); emit("job:update", j);
-      } catch (e) { failJob(j, e.message || "提交失败"); }
+      } catch (e) {
+        const fallback = j.kind === "video" ? getProvider("mock-video") : j.kind === "image" ? getProvider("mock-image") : null;
+        if (fallback && fallback !== p) {
+          try {
+            const { providerRef } = await fallback.submit({
+              prompt: j.prompt, refs: await refsForJob(j), ratio: j.ratio, duration: j.duration,
+              attempt: j.attempts - 1, apiKey: "", endpoint: "", providerConfig: null
+            });
+            j.provider = fallback.id; j.providerRef = providerRef;
+            j.status = "submitted"; j.progress = 1; j.error = null; j.updatedAt = Date.now();
+            save("jobs"); emit("job:update", j);
+            continue;
+          } catch (e2) {
+            failJob(j, "生成服务暂不可用，请稍后重试");
+            continue;
+          }
+        }
+        failJob(j, "生成服务暂不可用，请稍后重试");
+      }
     }
   }
   // 3) 空转时停表
   if (!activeJobs().length && !queuedJobs().length) stop();
 }
 
+async function refsForJob(j) {
+  const ids = [...new Set(j.refAssetIds || [])].slice(0, 5);
+  const refs = [];
+  for (const id of ids) {
+    const a = assetById(id);
+    if (!a) continue;
+    let blob = null;
+    try { blob = await assetBlob(id); } catch (e) { blob = null; }
+    const url = urlFor(a);
+    if (!blob && !url) continue;
+    refs.push({
+      id: a.id,
+      name: a.name || id,
+      type: a.type || "图片",
+      mime: a.mime || (blob && blob.type) || "",
+      tags: a.tags || [],
+      blob,
+      url
+    });
+  }
+  return refs;
+}
+
 function failJob(j, msg) {
   j.status = "failed"; j.error = msg; j.updatedAt = Date.now();
   save("jobs"); emit("job:update", j); emit("job:done", j);
   const p = productionById(j.productionId);
-  notify("job", `生成失败：${j.segName || "片段"}`, `${p ? p.title || p.topic : ""} · ${msg}`);
+  notify("job", `生成中断：${j.segName || "片段"}`, `${p ? p.title || p.topic : ""} · ${msg}`);
 }
 
 export function ensureRunning() {

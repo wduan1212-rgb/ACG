@@ -9,6 +9,7 @@ import { emptyState, toast, confirmModal, openLightbox } from "../ui/components.
 import { go } from "../core/router.js";
 import { openProductionDrawer, stagePage } from "./prodDrawer.js";
 import { urlFor, thumbHtml, assetCode, addAssetFromFile } from "../domain/assets.js";
+import { applyDemoProduction } from "../domain/demo.js";
 import { renderScriptPage } from "./chainScript.js";
 import { renderSlotsPage } from "./chainBoards.js";
 import { renderPromptsPage } from "./chainPrompts.js";
@@ -216,6 +217,7 @@ function renderHome(root, acc) {
   const onAct = {
     new: () => {
       const p = createProduction({ accountId: acc.id, origin: "manual" });
+      applyDemoProduction(p, { batch: false });
       state.ui.activeProductionId = p.id; save("meta");
       go("studio", "script");
     },

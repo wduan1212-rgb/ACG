@@ -92,7 +92,7 @@ export const agentView = {
     if (!mounted) {
       mounted = true;
       on("agent:msg", () => isLive() && (renderMsgs(true), renderSessions()));
-      on("agent:session", () => isLive() && (renderSessions(), renderMsgs(true)));
+      on("agent:session", () => isLive() && (renderSessions(), renderMsgs(true), renderBoard(), renderPhase()));
       on("agent:thinking", v => { thinking = v; if (!v) setTimeout(() => { thinkSteps = []; }, 400); else thinkSteps = []; isLive() && renderThinking(); });
       on("agent:think", step => { thinkSteps.push(step); isLive() && renderThinking(); });
       on("batch:update", () => schedule(true));
@@ -427,7 +427,7 @@ function wire(root) {
     }
 
     const sess = e.target.closest("[data-session]");
-    if (sess) { state.ui.activeSessionId = sess.dataset.session; save("meta"); renderSessions(); renderMsgs(true); return; }
+    if (sess) { state.ui.activeSessionId = sess.dataset.session; save("meta"); renderSessions(); renderMsgs(true); renderBoard(); renderPhase(); return; }
 
     // 固定流程模板：一键生成计划卡（每号随机主题）
     const tpl = e.target.closest("[data-tpl]");
@@ -514,7 +514,7 @@ function wire(root) {
   shell.addEventListener("change", async e => {
     const inp = e.target.closest("[data-agdrop-input]");
     if (inp && inp.files.length) {
-      const r = await routeMediaFiles(inp.files);
+      const r = await routeMediaFiles(inp.files, inp.dataset.agdropInput);
       reportRoute(r);
       inp.value = "";
       return;
@@ -552,10 +552,14 @@ function wire(root) {
       i >= 0 ? m.payload.accountIds.splice(i, 1) : m.payload.accountIds.push(id);
     }
     save("sessions");
+    // 整卡重建会让消息列表滚动跳回顶部 —— 重建前后保住 scrollTop
+    const listEl = $("#agwMsgs");
+    const keepTop = listEl ? listEl.scrollTop : 0;
     const tmp = document.createElement("div");
     tmp.innerHTML = renderMessage(m);
     node.closest("[data-mid]").replaceWith(tmp.firstElementChild);
     wireDrops();
+    if (listEl) listEl.scrollTop = keepTop;
   });
 
   wireDrops();
@@ -582,7 +586,7 @@ function wireDrops() {
     if (z.dataset.wired) return;
     z.dataset.wired = "1";
     wireDropZone(z, async files => {
-      const r = await routeMediaFiles(files);
+      const r = await routeMediaFiles(files, z.dataset.agdrop);
       reportRoute(r);
     });
     z.addEventListener("click", () => { const inp = z.querySelector("[data-agdrop-input]"); if (inp) inp.click(); });
@@ -597,7 +601,10 @@ function wireDrops() {
 
 function reportRoute(r) {
   if (!r) return;
-  if (r.assigned) toast(`已接收 ${r.assigned} 张图，分发到 ${r.tasks} 个任务${r.extra ? `（多出 ${r.extra} 张未分发）` : ""}`);
-  else if (r.videos) toast(`已登记 ${r.videos} 个视频素材入资产库`);
+  if (r.assigned) {
+    toast(`已接收 ${r.assigned} 张图，分发到 ${r.tasks} 个任务${r.extra ? `（多出 ${r.extra} 张未分发）` : ""}`);
+    // 立即同步对话卡（缺口进度）+ 右侧看板，不等防抖事件
+    if (isLive()) { refreshLiveCards(); renderBoard(); renderPhase(); }
+  } else if (r.videos) { toast(`已登记 ${r.videos} 个视频素材入资产库`); if (isLive()) renderBoard(); }
   else toast("当前没有等待上传的任务，先发起一批量产");
 }

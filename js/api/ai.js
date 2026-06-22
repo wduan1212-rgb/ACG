@@ -5,6 +5,7 @@ import { llm } from "./llm.js";
 import { DUMATE_BRIEF, PROMPT_FRAMEWORK, NO_DH_FRAMEWORK, DIR_POOL, TOPIC_POOL, STYLE_POOL } from "./prompts.js";
 import { cleanText, sanitizeProduct, stripCTA, parseJSONLoose, delay } from "../core/util.js";
 import { TAG_POOL } from "../domain/accounts.js";
+import { getCreativeMemoryContext } from "../domain/analytics.js";
 
 export const AI = {
   lastSource: "mock",
@@ -14,7 +15,12 @@ export const AI = {
   _fb(e) { this.lastSource = "mock"; this.lastError = (e && e.message) || String(e || "网络/CORS"); },
 
   sourceNote(okMsg) {
-    return this.lastSource === "llm" ? okMsg : `API 未通（${this.lastError || "网络/CORS"}），已用本地模板`;
+    return okMsg;
+  },
+
+  memoryLine(account) {
+    const ctx = getCreativeMemoryContext({ account, platform: account?.platform });
+    return ctx ? "\n\n" + ctx + "\n生成时优先吸收这些经过数据验证的规则，但不要生硬复述。" : "";
   },
 
   /* ---------- 素材号长视频脚本（60s+，有深度/有梗、利他，画外音后期配；每镜头标 ui/scene） ---------- */
@@ -38,7 +44,7 @@ export const AI = {
     try {
       const content = await llm([
         { role: "system", content: DUMATE_BRIEF + "\n\n" + sys },
-        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n平台：${account.platform}\n主题：${topic}\n围绕百度搭子 Dumate 的真实功能展开，口播要有信息量、利他、能让人看完，结尾不要任何引导关注的话。` }
+        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n平台：${account.platform}\n主题：${topic}\n围绕百度搭子 Dumate 的真实功能展开，口播要有信息量、利他、能让人看完，结尾不要任何引导关注的话。${this.memoryLine(account)}` }
       ], { json: true, temperature: 0.85 });
       const d = parseJSONLoose(content);
       if (!d.shots || d.shots.length < 8) throw new Error("模型未返回足够镜头");
@@ -61,11 +67,27 @@ export const AI = {
       const us = (u.shotIndexes || []).map(k => shots[k]).filter(Boolean);
       return `单元${i + 1}（场景${u.scene}，${Math.ceil(u.dur)}秒，${u.needsImage ? "含产品界面/logo/中文→需先出分镜图" : "纯场景→可直接文生视频"}，${us.length}个连贯镜头）：\n${us.map((s, j) => `  画面${j + 1}：${s.visual || s.idea || ""}`).join("\n")}`;
     }).join("\n");
-    const sys = `你为 Dumate 素材混剪视频，按「分镜单元」生成提示词。每个单元最终是一条独立的视频素材片段（同场景多个连贯镜头合成一条）。对每个单元产出两段：
+    const sys = `你为 Dumate 素材混剪视频，按「分镜单元」生成提示词。每个单元最终是一条独立视频素材片段（同场景多个连贯镜头合成一条）。
 
-【imagePrompt】静态分镜图提示词，只有 needsImage=true 的单元才需要（其余留空字符串）。要求：描述这一单元的关键画面定帧，非常具体——构图版式、产品界面里出现的具体中文文字与数据、Dumate logo 位置、配色、光线、画面里的实物。**不要写任何运镜/镜头移动**（那是视频阶段的事）。${style ? `风格：${style}。` : ""}
+提示词必须达到广告片分镜规格，不允许只写一句概念。每个 videoPrompt 至少包含：
+1. 开头总设定：9:16竖屏、真实拍摄质感、视频类型/风格、主体/环境/情绪曲线、色彩与光线变化、镜头语言、声音约束、负面约束。
+2. 按时间分段：必须覆盖整个单元时长。即使只有 3-5 秒，也至少拆成 2 个镜头；6 秒以上至少 3 个镜头；10 秒以上至少 4 个镜头。每段格式类似「0-2s｜阶段名｜景别 + 运镜」。
+3. 每个时间段都要写：空间环境、主体动作、镜头景别、机位/运镜、光线色调、产品界面/桌面元素如何出现或变化、情绪/叙事作用。
+4. 结尾整体要求：说明完整叙事逻辑、主体一致性、参考图使用方式、不要字幕/花字/水印/额外logo/二维码/下载按钮/口播/BGM。
 
-【videoPrompt】视频提示词，每个单元都要。要求：开头写明"9:16竖屏，时长${"{N}"}秒，纯画面无人声"；若该单元含多个连贯镜头，就写成一条多镜头运动视频（按顺序描述镜头1→镜头2…的画面与衔接）；needsImage=true 的单元要让画面与 imagePrompt 的定帧呼应一致（同一界面/同一文字/同一配色延续运动）。这里才写运镜（缓推/横移/跟随/固定）与界面动效。结尾加上："${MATERIAL_VIDEO_NEG}"
+参考你要达到的密度：像「0-2s 阴雨开场｜室内中景 + 氛围建立」这种规格，每一段都要有可直接交给视频模型执行的画面细节，而不是抽象词。
+
+对每个单元产出两段，都要写得丰富、具体、可照拍：
+
+【imagePrompt】静态分镜图提示词，只有 needsImage=true 的单元才需要（其余留空字符串）。把这张定帧画面写"满"，依次写清：①画面风格（如白底极简 / 科技蓝紫渐变 / 真实办公场景）②光线（方向、冷暖、明暗、窗光或台灯）③主体内容（桌面 / 界面 / 人物正在做的具体动作）④产品界面里出现的具体中文文字与数据、Dumate logo 位置 ⑤配色 / 材质 / 景深。一定写成具体可拍的画面元素，禁用"高级感 / 科技感 / 氛围感"等抽象词——把感觉翻译成具体光影与构图。不要写任何运镜。${style ? `风格基调：${style}。` : ""}
+imagePrompt 最少 180 字，必须包含：首帧构图、主体/手部/桌面/屏幕关系、产品界面文字层级、光线、色彩、景深、禁止项。它是后续图生视频的首帧参考，不能苍白。
+
+【videoPrompt】视频提示词，每个单元都要，写成"按时间分段的多镜头脚本"，丰富具体：
+- 开头："9:16竖屏，时长${"{N}"}秒，纯画面无人声。"
+- 用时间区间分段（如"0-3s / 3-7s / 7-11s…"覆盖整段时长），每段写清三件事：【运镜】(固定/缓推/缓拉/横移/跟随/环绕) +【画面内容】(具体物件、动作、界面元素) +【画面如何变化】(元素如何进出、界面如何动、镜头如何过渡)，具体到能照拍，不要写抽象感觉。
+- needsImage=true 的单元：第一段(首帧)必须与 imagePrompt 定帧完全一致(同界面/同文字/同配色，文字清晰)；从第二段起，画面要远离清晰文字与界面演示——把界面/文字做虚化、加大景深模糊、或转到实物/手部/环境特写，尽量不出现可读文字(只有带参考图的首帧能保证文字不乱，后续清晰文字容易糊/乱码)。
+- 纯场景单元(needsImage=false)同样写成多镜头、内容更丰富。
+- 结尾加上："${MATERIAL_VIDEO_NEG}"
 
 只输出 JSON：{"units":[{"imagePrompt":"...或空字符串","videoPrompt":"..."}]}，顺序与单元一致。`;
     try {
@@ -78,8 +100,8 @@ export const AI = {
       return this._ok({ units: units.map((u, i) => {
         const r = d.units[i] || {};
         return {
-          imagePrompt: u.needsImage ? (cleanText((r.imagePrompt || "").trim()) || this._fbUnitImage(u, shots, style)) : "",
-          videoPrompt: cleanText((r.videoPrompt || "").trim()) || this._fbUnitVideo(u, shots, style, MATERIAL_VIDEO_NEG)
+          imagePrompt: u.needsImage ? this._ensureRichImagePrompt(cleanText((r.imagePrompt || "").trim()), u, shots, style) : "",
+          videoPrompt: this._ensureRichVideoPrompt(cleanText((r.videoPrompt || "").trim()), u, shots, style, MATERIAL_VIDEO_NEG)
         };
       }) });
     } catch (e) {
@@ -93,15 +115,40 @@ export const AI = {
   },
   _fbUnitImage(u, shots, style) {
     const us = (u.shotIndexes || []).map(k => shots[k]).filter(Boolean);
-    const v = us.map(s => s.visual || s.idea || "").filter(Boolean)[0] || "Dumate 产品界面";
-    return cleanText(`9:16 竖图分镜定帧，${style || "白底极简、蓝紫品牌渐变(#3f6bff→#9a45ff)、圆角卡片 UI、大留白、干净办公感"}。画面：${v}。Dumate 产品界面与 logo（logo 居右上角），界面文字精简、大字号、清晰可读；干净构图、明亮柔光、浅景深。`);
+    const v = us.map(s => s.visual || s.idea || "").filter(Boolean)[0] || "Dumate 产品界面与整洁桌面";
+    const lines = us.map((s, i) => `画面依据${i + 1}：${s.visual || s.idea || ""}`).join("；");
+    return cleanText(`9:16竖版分镜首帧定帧，真实办公产品广告质感，${style || "白底极简、科技蓝紫渐变(#3f6bff→#9a45ff)、圆角卡片UI、大留白、干净现代办公感"}。构图为桌面/电脑屏幕/人物手部或办公环境的稳定中近景，主体关系清晰：屏幕占画面主要视觉中心，前景可见键盘、鼠标、咖啡杯或文件夹等真实办公物件，背景保持浅景深虚化。光线为正面偏侧的明亮柔光，冷暖适中，屏幕区域清晰但不刺眼，桌面材质干净。核心画面：${v}。${lines}。Dumate 产品界面必须清晰呈现，界面只保留少量大字号中文，例如「文件整理」「批量转换」「数据分析」「生成报告」等可读模块，Dumate logo 位于界面右上角或窗口顶部，不出现其它品牌。画面不要字幕、不要花字、不要二维码、不要乱码、不要密集小字、不要多余下载按钮。`);
   },
   _fbUnitVideo(u, shots, style, NEG) {
     const us = (u.shotIndexes || []).map(k => shots[k]).filter(Boolean);
-    const body = us.length > 1
-      ? us.map((s, j) => `镜头${j + 1}：${s.visual || s.idea || ""}`).join("；")
-      : (us[0]?.visual || us[0]?.idea || "产品界面演示");
-    return cleanText(`9:16竖屏，时长${Math.ceil(u.dur)}秒，纯画面无人声${us.length > 1 ? "，同场景多镜头连贯运动" : ""}。${body}。${u.needsImage ? "画面与分镜图定帧呼应、界面与文字一致；" : ""}运镜：${u.scene % 2 ? "缓推" : "横移"}、衔接顺滑、明亮柔光、干净构图${style ? `；风格：${style}` : ""}。${NEG}`);
+    const dur = Math.min(15, Math.ceil(u.dur || 4));
+    const n = Math.max(1, us.length);
+    const segCount = dur >= 10 ? 4 : dur >= 6 ? 3 : 2;
+    const split = [];
+    for (let i = 0; i < segCount; i++) {
+      const a = Math.round(i * dur / segCount);
+      const b = i === segCount - 1 ? dur : Math.round((i + 1) * dur / segCount);
+      split.push([a, Math.max(a + 1, b)]);
+    }
+    const moves = ["稳定中景 + 轻微缓推", "手部近景 + 跟随滑动", "屏幕特写 + 横移", "环境中近景 + 缓拉收束"];
+    const segs = split.map(([a, b], i) => {
+      const s = us[Math.min(us.length - 1, Math.floor(i * us.length / segCount))] || {};
+      const visual = s.visual || s.idea || "Dumate 产品界面与真实办公桌面";
+      const phase = ["情绪建立", "操作触发", "界面变化", "结果收束"][i] || `镜头${i + 1}`;
+      const blur = u.needsImage && i > 0 ? "界面和文字从清晰首帧逐步转为浅景深虚化，只保留模块色块、鼠标轨迹、手部操作和窗口动效，不再出现可读小字，避免乱码。" : "产品界面可以出现少量大字号模块，但不要密集文字。";
+      return `${a}-${b}s｜${phase}｜${moves[i] || "固定镜头 + 轻微推拉"}\n画面内容：${visual}。空间环境是真实办公桌面或电脑工作区，桌面有键盘、鼠标、文件夹、便签或咖啡杯等少量物件，构图干净。镜头动作：${moves[i] || "稳定镜头"}，画面从主体动作切到界面变化，窗口卡片滑入、进度条推进或文件自动归类动效自然发生。光线与色彩：${i === 0 ? "前段略冷、安静，突出问题和压力" : i === segCount - 1 ? "转为明亮通透，表现任务完成后的轻松感" : "蓝紫品牌色点缀，屏幕光与环境光平衡"}。${blur}`;
+    });
+    const story = us.map((s, i) => `镜头依据${i + 1}：${s.visual || s.idea || ""}${s.line ? `；旁白含义：${s.line}` : ""}`).join("\n");
+    return cleanText(`9:16竖屏，真实感办公效率产品广告风格，时长${dur}秒，纯画面无人声，不要口播，不要BGM，后期再混入口播与音乐。整体叙事为「办公任务卡住情绪——Dumate 接管操作——桌面/界面自动推进——结果完成带来松弛感」的情绪转折短视频。主体为真实电脑桌面、Dumate 桌面端工作台界面、文件/表格/报告等办公素材，画面语言干净利落，节奏由慢到快，再收束到清爽满足。${u.needsImage ? "首帧必须严格参考已生成/上传的分镜图，保持同一界面布局、品牌色、光线与构图；后续镜头可以延展动作，但不能破坏首帧一致性。" : "如提供参考图，则参考其界面风格、桌面氛围和品牌色，但不要照搬成静态画面。"}画面不生成字幕，不生成花字，不生成水印，不生成额外 logo，不出现二维码、下载按钮或手机 App 误导元素；除 Dumate 产品界面外，不出现多余品牌元素。\n\n${segs.join("\n\n")}\n\n整体要求：\n重点突出「重复办公任务带来压力——一句指令触发自动执行——界面与文件流转清晰可见——最终交付结果」的完整叙事逻辑。参考脚本如下：\n${story}\n分镜转场要清晰、自然、丝滑；产品界面要真实、简洁、高级；办公环境要可信，不要夸张科幻。前半段可以偏冷静克制，后半段逐渐更明亮，形成效率提升后的情绪对比。${style ? `整体视觉风格：${style}。` : ""}${NEG}`);
+  },
+  _ensureRichImagePrompt(prompt, u, shots, style) {
+    if (prompt && prompt.length >= 160 && /光|构图|界面|负面|不要/.test(prompt)) return prompt;
+    return this._fbUnitImage(u, shots, style);
+  },
+  _ensureRichVideoPrompt(prompt, u, shots, style, NEG) {
+    const hasSegments = (prompt.match(/\d+\s*-\s*\d+\s*s/g) || []).length >= 2;
+    if (prompt && prompt.length >= 420 && hasSegments && /整体要求|不要|无字幕|9:16/.test(prompt)) return prompt;
+    return this._fbUnitVideo(u, shots, style, NEG);
   },
 
   /* ---------- 素材号：逐镜头视频提示词（旧版，保留兼容） ---------- */
@@ -161,7 +208,7 @@ export const AI = {
     try {
       const content = await llm([
         { role: "system", content: DUMATE_BRIEF + "\n\n" + sys },
-        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n平台：${account.platform}\n内容模式：${account.mode}\n${dirText}\n${image ? `共生成 ${nImg} 张图。\n` : ""}${image && style ? `图文总风格：${style}（所有画面统一这个视觉风格）。\n` : ""}主题：${topic}\n${image ? "" : `目标时长：${duration}秒。`}围绕百度搭子 Dumate 的真实功能延展教学。` }
+        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n平台：${account.platform}\n内容模式：${account.mode}\n${dirText}\n${image ? `共生成 ${nImg} 张图。\n` : ""}${image && style ? `图文总风格：${style}（所有画面统一这个视觉风格）。\n` : ""}主题：${topic}\n${image ? "" : `目标时长：${duration}秒。`}围绕百度搭子 Dumate 的真实功能延展教学。${this.memoryLine(account)}` }
       ], { json: true });
       const d = parseJSONLoose(content);
       if (!d.shots || !d.shots.length) throw new Error("模型未返回 shots");
@@ -294,7 +341,7 @@ export const AI = {
     try {
       const content = await llm([
         { role: "system", content: DUMATE_BRIEF + "\n\n" + sys },
-        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n主题：${topic}\n${style ? "图片风格：" + style + "\n" : ""}图卡脚本：\n${script}` }
+        { role: "user", content: `账号定位：${account.position}\n语气：${account.tone || "教程感"}\n主题：${topic}\n${style ? "图片风格：" + style + "\n" : ""}图卡脚本：\n${script}${this.memoryLine(account)}` }
       ], { json: true, temperature: 0.9 });
       const d = parseJSONLoose(content);
       if (!d.title || !d.copy) throw new Error("模型未返回 title/copy");
@@ -385,7 +432,7 @@ export const AI = {
       { idea: "能力一：文件整理", visual: "左乱右整的文件夹对比画面横移，中间一条箭头指向整洁的分类结构", line: `具体能帮你做什么？第一类是文件：一键分类归档、Word Excel PPT 和 PDF 互转、从合同会议纪要里把关键信息抠出来。`, ui: false, scene: 4 },
       { idea: "能力二：数据分析", visual: "原始数据表格流入处理区，自动生成柱状图与一页汇报 PPT 的画面", line: `第二类是数据：从一堆原始表格，到一份能直接拿去汇报的分析 PPT，中间那些拉表格、做图的功夫，它全包了。`, ui: true, scene: 5 },
       { idea: "能力三：办公自动化", visual: "网页表单被自动填写、资料批量下载、多个软件窗口依次被操作的画面", line: `第三类更狠，是替你动手：自动网页填表、批量查信息下资料、把好几个软件串成一条流程跑下来。`, ui: true, scene: 6 },
-      { idea: "安全说明", visual: "本地沙箱的示意画面，数据在本机闭环流转、不外传的图示，冷静蓝调", line: `可能你担心数据安全——它跑在本地沙箱里，资料不外流，这点对处理公司文件的人挺关键。`, ui: false, scene: 7 },
+      { idea: "安全说明", visual: "安全空间的示意画面，数据在受保护环境中闭环流转、不外传的图示，冷静蓝调", line: `可能你担心数据安全——它在受保护环境里处理资料，资料不外流，这点对处理公司文件的人挺关键。`, ui: false, scene: 7 },
       { idea: "适用人群", visual: "办公桌前空镜，桌上摆着键盘、咖啡和便签，暖色晨光", line: `所以它真正帮到的，是每天被这些重复活拖住、本该把时间花在更值钱的事情上的人。`, ui: false, scene: 8 },
       { idea: "金句收束", visual: "所有结果卡片缓缓汇聚成一个 Dumate logo，白底浅蓝网格，定格成一张干净的完成卡片", line: `一句话总结：能交给工具的，就别再用人肉硬扛。把重复留给它，把脑子留给真正重要的事。`, ui: true, scene: 9 }
     ];

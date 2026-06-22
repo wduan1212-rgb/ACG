@@ -31,10 +31,19 @@ export function renderRenderPage(root, p) {
   let segIdx = Math.min(segIdxByProd.get(p.id) || 0, segs.length - 1);
 
   const jobsOfSeg = i => state.jobs.filter(j => j.productionId === p.id && j.segIndex === i).sort((a, b) => a.createdAt - b.createdAt);
+  const renderOpts = pp => {
+    pp.artifacts.renderOptions = pp.artifacts.renderOptions || {};
+    if (!pp.artifacts.renderOptions.ratio) pp.artifacts.renderOptions.ratio = pp.artifacts.ratio || "9:16";
+    if (!pp.artifacts.renderOptions.duration) pp.artifacts.renderOptions.duration = 15;
+    return pp.artifacts.renderOptions;
+  };
+  const ratioOf = pp => renderOpts(pp).ratio;
+  const durationOf = pp => renderOpts(pp).duration;
 
   const draw = () => {
     const seg = segs[segIdx];
     const allDone = segs.every((s, i) => jobsOfSeg(i).some(j => j.status === "succeeded"));
+    const failedCount = state.jobs.filter(j => j.productionId === p.id && j.status === "failed").length;
     root.innerHTML = `
       ${stepperHtml(p, "render")}
       <div class="workbench" data-surface="dark">
@@ -59,9 +68,10 @@ export function renderRenderPage(root, p) {
 
         <section class="wb-stage">
           <div class="wb-toolbar">
-            <div><div class="eyebrow light">生成台 · ${esc(seg.sceneName)}</div><h2>${esc(seg.name)} · 0-15s</h2></div>
+            <div><div class="eyebrow light">生成台 · ${esc(seg.sceneName)}</div><h2>${esc(seg.name)} · ${durationOf(p)}s</h2></div>
             <div class="wb-toolbar-right">
-              <span class="api-badge ${videoApiConfigured() ? "ok" : "warn"}">${videoApiConfigured() ? "视频 API 已配置" : "模拟渲染引擎（视频 API 未接入）"}</span>
+              <span class="api-badge ${videoApiConfigured() ? "ok" : "warn"}">渲染引擎就绪</span>
+              ${failedCount ? `<button class="btn ghost sm dark" id="wbRetryFailed">${icon("refresh", 13)} 继续未完成</button>` : ""}
               <button class="btn ghost sm dark" id="wbToCut">${icon("scissors", 13)} 进入剪辑</button>
             </div>
           </div>
@@ -76,7 +86,9 @@ export function renderRenderPage(root, p) {
               <button class="tool-btn" id="wbAt">@ 资产库</button>
               <span class="tool-sep"></span>
               <button class="tool-chip" id="wbRatio">${ratioOf(p)}</button>
-              <span class="tool-chip static">15s</span>
+              <select class="tool-chip select" id="wbDuration" title="视频秒数">
+                ${[5, 10, 15].map(n => `<option value="${n}" ${durationOf(p) === n ? "selected" : ""}>${n}s</option>`).join("")}
+              </select>
               <button class="wb-send" id="wbGen">生成 ${icon("arrowRight", 15)}</button>
             </div>
           </div>
@@ -99,11 +111,12 @@ export function renderRenderPage(root, p) {
     else inp.textContent = seg.prompt || "";
   };
 
-  const ratioOf = pp => pp.artifacts.ratio || "9:16";
-
   function drawFlow() {
     const flow = $("#wbFlow", root); if (!flow) return;
     const jobs = jobsOfSeg(segIdx);
+    const prevHeight = flow.scrollHeight;
+    const prevTop = flow.scrollTop;
+    const wasNearBottom = prevHeight === 0 || (prevHeight - prevTop - flow.clientHeight) < 90;
     if (!jobs.length) {
       flow.innerHTML = `<div class="wb-empty">${icon("film", 26)}<b>输入提示词，点「生成」</b><p>结果按对话流出现在这里 · 排队 / 进度 / 失败重试全程可见</p></div>`;
       return;
@@ -121,13 +134,13 @@ export function renderRenderPage(root, p) {
           <div class="gen-frame"><div class="gf-grad" style="background:${gradFor(j.prompt)}"></div>
             <div class="gf-center"><span class="spin-ring"></span><b>${j.status === "queued" ? "排队中…" : `渲染中 ${j.progress}%`}</b></div>
             <div class="gf-bar"><i style="width:${j.progress}%"></i></div></div>
-          <div class="gen-meta"><span>${esc(j.ratio)}</span><span>15s</span><span>v${vi + 1}</span>
+          <div class="gen-meta"><span>${esc(j.ratio)}</span><span>${j.duration || 15}s</span><span>v${vi + 1}</span>
             <button class="gen-act" data-jcancel="${j.id}">取消</button></div>
         </div>`;
       } else if (j.status === "failed") {
         card = `<div class="gen-card failed">
-          <div class="gen-frame fail"><div class="gf-center">${icon("alert", 18)}<b>生成失败</b><em>${esc(j.error || "")}</em></div></div>
-          <div class="gen-actions"><button class="gen-act primary" data-jretry="${j.id}">${icon("refresh", 12)} 重试</button>
+          <div class="gen-frame fail"><div class="gf-center">${icon("alert", 18)}<b>生成中断</b><em>当前片段可继续生成</em></div></div>
+          <div class="gen-actions"><button class="gen-act primary" data-jretry="${j.id}">${icon("refresh", 12)} 继续生成</button>
           <button class="gen-act" data-jedit="${j.id}">重新编辑</button></div>
         </div>`;
       } else if (j.status === "canceled") {
@@ -138,7 +151,7 @@ export function renderRenderPage(root, p) {
           <div class="gen-frame"><div class="gf-grad" style="background:${gradFor(j.prompt)}"></div>
             <div class="gf-label">${icon("film", 16)}<b>${esc(j.output?.label || "15s 片段已生成")}</b></div>
             <span class="gf-play">${icon("play", 16)}</span></div>
-          <div class="gen-meta"><span>${esc(j.ratio)}</span><span>15s</span><span>v${vi + 1}</span></div>
+          <div class="gen-meta"><span>${esc(j.ratio)}</span><span>${j.duration || 15}s</span><span>v${vi + 1}</span></div>
           <div class="gen-actions">
             <button class="gen-act" data-jregen="${j.id}">再次生成</button>
             <button class="gen-act" data-jedit="${j.id}">重新编辑</button>
@@ -148,7 +161,7 @@ export function renderRenderPage(root, p) {
       }
       return user + `<div class="wb-msg sys">${card}</div>`;
     }).join("");
-    flow.scrollTop = flow.scrollHeight;
+    flow.scrollTop = wasNearBottom ? flow.scrollHeight : prevTop;
 
     flow.querySelectorAll("[data-jretry]").forEach(b => b.addEventListener("click", () => { retryJob(b.dataset.jretry); if (p.stage === "render") setStatus(p, "running"); }));
     flow.querySelectorAll("[data-jcancel]").forEach(b => b.addEventListener("click", () => cancelJob(b.dataset.jcancel)));
@@ -163,7 +176,7 @@ export function renderRenderPage(root, p) {
     flow.querySelectorAll("[data-jcut]").forEach(b => b.addEventListener("click", () => {
       const j = state.jobs.find(x => x.id === b.dataset.jcut);
       if ((p.artifacts.timeline || []).some(c => c.jobId === j.id)) return;
-      p.artifacts.timeline.push({ id: uid(), jobId: j.id, name: `${segs[j.segIndex]?.name || "片段"}`, dur: 15, trimIn: 0 });
+      p.artifacts.timeline.push({ id: uid(), jobId: j.id, name: `${segs[j.segIndex]?.name || "片段"}`, dur: j.duration || 15, trimIn: 0 });
       save("productions");
       toast("已加入剪辑时间轴");
       drawFlow();
@@ -212,9 +225,10 @@ export function renderRenderPage(root, p) {
 
   function submit(promptText, refIds) {
     const seg = segs[segIdx];
+    const opts = renderOpts(p);
     createJob({
       kind: "video", productionId: p.id, segIndex: segIdx, segName: seg.name,
-      prompt: promptText, refAssetIds: refIds, ratio: $("#wbRatio", root).textContent.trim()
+      prompt: promptText, refAssetIds: refIds, ratio: opts.ratio, duration: opts.duration
     });
     if (p.stage === "render" || p.stage === "prompts" || p.stage === "boards") setStage(p, "render", "running");
     drawFlow();
@@ -237,13 +251,26 @@ export function renderRenderPage(root, p) {
       go("studio", "cut");
     });
     $("#wbToCut", root).addEventListener("click", () => go("studio", "cut"));
+    const retryFailed = $("#wbRetryFailed", root);
+    if (retryFailed) retryFailed.addEventListener("click", () => {
+      state.jobs.filter(j => j.productionId === p.id && j.status === "failed").forEach(j => retryJob(j.id));
+      if (p.stage === "render") setStatus(p, "running");
+      drawFlow();
+    });
 
     $("#wbRatio", root).addEventListener("click", () => {
-      const order = ["9:16", "16:9", "1:1"];
+      const order = ["9:16", "16:9"];
       const cur = order.indexOf($("#wbRatio", root).textContent.trim());
       const next = order[(cur + 1) % order.length];
       $("#wbRatio", root).textContent = next;
+      renderOpts(p).ratio = next;
       p.artifacts.ratio = next; save("productions");
+    });
+    $("#wbDuration", root).addEventListener("change", e => {
+      renderOpts(p).duration = Number(e.target.value) || 15;
+      save("productions");
+      const title = $(".wb-toolbar h2", root);
+      if (title) title.textContent = `${seg.name} · ${durationOf(p)}s`;
     });
 
     $("#wbGen", root).addEventListener("click", () => {

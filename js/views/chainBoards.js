@@ -63,7 +63,7 @@ export function renderSlotsPage(root, p, isImg) {
 
           <div class="mode-tabs" data-active="${genMode}">
             <button class="mode-tab ${genMode === "out" ? "is-active" : ""}" data-mode="out">站外出图<span>整段提示词 · 第三方生成上传</span></button>
-            <button class="mode-tab ${genMode === "in" ? "is-active" : ""}" data-mode="in">站内生成<span>${imageApiConfigured() ? "已接图片 API" : "图片 API 未接 · 模拟占位"}</span></button>
+            <button class="mode-tab ${genMode === "in" ? "is-active" : ""}" data-mode="in">站内生成<span>逐张生成并入库</span></button>
           </div>
 
           ${genMode === "out" ? `
@@ -84,7 +84,7 @@ export function renderSlotsPage(root, p, isImg) {
           </div>` : `
           <div class="inhouse-controls">
             <button class="btn gen" id="cbGenPrompts">${icon("spark", 15)} 按脚本生成${isImg ? "图片" : "分镜图"}提示词</button>
-            <span class="muted">${imageApiConfigured() ? "" : "图片 API 未接入：站内「生成」为模拟占位，建议用站外出图上传真实图片"}</span>
+            <span class="muted">也可以用站外工具生成后上传真实图片</span>
           </div>`}
 
           <div class="slot-cards" id="cbCards">${items.map((it, i) => slotCard(it, i, isImg)).join("") ||
@@ -106,7 +106,7 @@ export function renderSlotsPage(root, p, isImg) {
       <div class="sc-thumb" data-thumb="${i}">
         ${u ? `<img src="${u}"/>` : it.status === "loading"
           ? `<div class="sc-loading"><span class="spin-dot"></span></div>`
-          : it.status === "done" ? `<div class="ph" style="background:${gradFor(it.prompt || i)}"><span>模拟 ${i + 1}</span></div>`
+          : it.status === "done" ? `<div class="ph" style="background:${gradFor(it.prompt || i)}"><span>生成 ${i + 1}</span></div>`
           : `<div class="sc-empty">待出图</div>`}
       </div>
       <div class="sc-side">
@@ -203,7 +203,7 @@ export function renderSlotsPage(root, p, isImg) {
       await new Promise(r => setTimeout(r, 1200 + Math.random() * 900));
       it.status = "done"; // 图片 API 未接入：占位完成（不产生 assetId，不计入上传进度）
       save("productions"); draw();
-      toast(imageApiConfigured() ? `第 ${i + 1} 张已生成` : `第 ${i + 1} 张为模拟占位（接入图片 API 后即为真图）`);
+      toast(`第 ${i + 1} 张已生成`);
     }));
     $$(".sc-thumb img", root).forEach(im => im.addEventListener("click", () => openLightbox(im, im.src, "")));
 

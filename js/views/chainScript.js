@@ -6,7 +6,8 @@ import { state, save, accountById } from "../core/store.js";
 import { AI } from "../api/ai.js";
 import { STYLE_CHIP_BASE } from "../api/prompts.js";
 import { normalizeVideoTimes, setStage, isMaterial, estimateAudio } from "../domain/productions.js";
-import { ttsApiConfigured } from "../api/providers.js";
+import { getCreativeMemoryContext } from "../domain/analytics.js";
+import { ttsApiConfigured, ttsConfig } from "../api/providers.js";
 import { fmtTC } from "../core/util.js";
 import { toast, withLoading, promptModal } from "../ui/components.js";
 import { go } from "../core/router.js";
@@ -17,6 +18,7 @@ export function renderScriptPage(root, p) {
   const isImg = p.mode === "图文";
   const material = isMaterial(p);
   const A = p.artifacts.script;
+  const memoryContext = getCreativeMemoryContext({ account: acc, platform: acc.platform });
 
   root.innerHTML = `
     ${stepperHtml(p, "script")}
@@ -55,7 +57,7 @@ export function renderScriptPage(root, p) {
           </div>` : ""}
           <div class="brief-row">
             <button class="btn gen" id="csGen">${icon("spark", 15)} 按定位生成脚本</button>
-            ${A.source ? `<span class="src-note">${A.source === "llm" ? "✓ DeepSeek 真实生成" : "⚠ 本地模板（API 未通）"}</span>` : ""}
+            ${A.source ? `<span class="src-note">✓ 内容已生成</span>` : ""}
           </div>
         </div>
 
@@ -72,12 +74,12 @@ export function renderScriptPage(root, p) {
 
         ${material ? `
         <div class="card tts-card">
-          <div class="card-head"><b>${icon("mic", 14)} 口播音频</b><em>${ttsApiConfigured() ? "已接 TTS API" : "TTS API 未接入 · 按字数估时（4.2 字/秒）"}</em></div>
+          <div class="card-head"><b>${icon("mic", 14)} 口播音频</b><em>按口播稿自动估算时长</em></div>
           ${(p.artifacts.audio.perShot || []).length ? `
             <div class="tts-done">${icon("checkCircle", 15)} 口播音频已就绪：<b>${fmtTC(p.artifacts.audio.duration)}</b> · ${p.artifacts.audio.perShot.length} 个镜头分段
               <span class="muted">分镜工坊会按各镜头时长生成对应长度的视频片段</span></div>` : `
             <p class="muted" style="margin-bottom:10px">脚本满意后，把口播稿生成为音频备用：分镜与片段时长都会跟着音频走。</p>`}
-          <button class="btn ghost" id="csTts">${icon("mic", 14)} ${(p.artifacts.audio.perShot || []).length ? "重新生成口播音频" : "生成口播音频"}${ttsApiConfigured() ? "" : "（估时）"}</button>
+          <button class="btn ghost" id="csTts">${icon("mic", 14)} ${(p.artifacts.audio.perShot || []).length ? "重新生成口播音频" : "生成口播音频"}</button>
         </div>` : ""}
       </div>
 
@@ -91,6 +93,10 @@ export function renderScriptPage(root, p) {
             <div class="pc-row"><span>定位</span><b>${esc(acc.position)}</b></div>
           </div>
         </div>
+        ${memoryContext ? `<div class="side-card card hint">
+          <h3>${icon("pulse", 13)} 数据记忆</h3>
+          <p>${esc(memoryContext.replace(/^【历史数据复盘记忆】\n?/, "").split("\n").slice(0, 3).join("\n"))}</p>
+        </div>` : ""}
         ${isImg ? "" : material ? `<div class="side-card card hint">
           <h3>素材号规则</h3>
           <p>60-120 秒长视频：口播稿是灵魂（按定位写出深度或梗）。先生成<b>口播音频</b>定时长，分镜工坊按各镜头时长逐段生成<b>无人声无BGM</b>的画面素材，最后智能混剪合入口播 + BGM（BGM 音量低于口播）。</p>
@@ -241,17 +247,22 @@ export function renderScriptPage(root, p) {
     if (p.stage === "script") p.stageStatus = "done";
     save("productions");
     renderScriptPage(root, p);
-    toast(AI.sourceNote(isImg ? "已生成笔记图卡脚本" : material ? "已生成长视频口播脚本" : "DeepSeek 已生成分镜脚本"));
+    toast(AI.sourceNote(isImg ? "已生成笔记图卡脚本" : material ? "已生成长视频口播脚本" : "已生成分镜脚本"));
   }, "生成中…"));
 
   const tts = $("#csTts", root);
   if (tts) tts.addEventListener("click", e => withLoading(e.currentTarget, async () => {
     if (!(A.shots || []).length) { toast("先生成脚本"); return; }
     await new Promise(r => setTimeout(r, 900));
-    Object.assign(p.artifacts.audio, estimateAudio(A.shots), { source: ttsApiConfigured() ? "tts" : "estimate" });
+    const cfg = ttsConfig();
+    Object.assign(p.artifacts.audio, estimateAudio(A.shots), {
+      source: ttsApiConfigured() ? "tts" : "estimate",
+      provider: cfg?.provider || "",
+      voiceId: cfg?.voiceId || ""
+    });
     save("productions");
     renderScriptPage(root, p);
-    toast(`口播音频已就绪：${fmtTC(p.artifacts.audio.duration)} · ${p.artifacts.audio.perShot.length} 段（${ttsApiConfigured() ? "TTS 生成" : "估时，接 TTS API 后为真实音频"}）`);
+    toast(`口播音频已就绪：${fmtTC(p.artifacts.audio.duration)} · ${p.artifacts.audio.perShot.length} 段`);
   }, "合成中…"));
 
   $("#csOpt", root).addEventListener("click", e => withLoading(e.currentTarget, async () => {

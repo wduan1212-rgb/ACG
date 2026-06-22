@@ -21,10 +21,35 @@ export async function preloadBlobUrls() {
   });
 }
 
+export async function materializeStaticAssets() {
+  const targets = state.assets.filter(a => a.staticUrl && !a.hasBlob);
+  if (!targets.length) return 0;
+  let ok = 0;
+  for (const a of targets) {
+    try {
+      const res = await fetch(new URL(encodeURI(a.staticUrl), location.href).href, { cache: "no-store" });
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      await db.putBlob(a.id, blob);
+      const old = urlCache.get(a.id);
+      if (old) URL.revokeObjectURL(old);
+      urlCache.set(a.id, URL.createObjectURL(blob));
+      a.hasBlob = true;
+      a.mime = a.mime || blob.type || "";
+      ok++;
+    } catch (e) {
+      // 静态素材取不到时保留 staticUrl，页面仍可在服务恢复后读取。
+    }
+  }
+  if (ok) save("assets");
+  return ok;
+}
+
 export function urlFor(idOrAsset) {
   const a = typeof idOrAsset === "string" ? assetById(idOrAsset) : idOrAsset;
   if (!a) return null;
   if (urlCache.has(a.id)) return urlCache.get(a.id);
+  if (a.staticUrl) return new URL(encodeURI(a.staticUrl), location.href).href; // 演示版本：可靠引用项目内静态素材
   if (a.dataUrl) return a.dataUrl; // 兼容遗留小数据
   return null;
 }
@@ -89,6 +114,7 @@ export async function assetU8(id) {
 const TYPE_HUE = { "图片": "linear-gradient(135deg,#3D5BFF,#4b8dff)", "视频": "linear-gradient(135deg,#7A4DFF,#3D5BFF)", "音频": "linear-gradient(135deg,#0CA678,#22B8CF)", "图集": "linear-gradient(135deg,#E64980,#7A4DFF)" };
 export function thumbHtml(a, cls = "") {
   const u = urlFor(a);
+  if (u && a.type === "视频") return `<video class="${cls}" src="${u}" muted playsinline preload="metadata"></video>`;
   if (u && a.type !== "音频") return `<img class="${cls}" src="${u}" alt="" loading="lazy"/>`;
   return `<div class="ph ${cls}" style="background:${TYPE_HUE[a.type] || gradFor(a.name)}"><span>${esc((a.type || a.name || "素")[0])}</span></div>`;
 }

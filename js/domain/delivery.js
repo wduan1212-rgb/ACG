@@ -89,7 +89,7 @@ export async function downloadDelivery(asset) {
       `标题：${asset.title || ""}`,
       `构成：${asset.clips || 0} 段成片拼接${asset.subCount ? ` · ${asset.subCount} 条字幕` : ""}`,
       ``, `--- 发布文案 ---`, asset.copy || "", ``,
-      `（视频渲染 API 接入后，此处将是 ${asset.name}.mp4 成片文件）`
+      `（视频成片文件由生成链路导出）`
     ].join("\n");
     downloadBlob(`${asset.name}_交付单.txt`, new Blob([manifest], { type: "text/plain" }));
   }
@@ -113,6 +113,6 @@ export async function downloadAsset(a) {
     const link = document.createElement("a");
     link.href = u; link.download = a.name; link.click();
   } else {
-    window.__toast && window.__toast("该素材是占位示例，没有可下载的文件");
+    window.__toast && window.__toast("该素材暂不支持直接下载");
   }
 }

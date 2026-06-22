@@ -13,6 +13,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Dumate Studio 启动中… (Ctrl+C 退出)"
-( sleep 1 && open "http://localhost:4173" ) &
-exec node tools/serve.mjs 4173
+PORT=4188
+echo "Dumate Studio 启动中… http://localhost:${PORT} (Ctrl+C 退出)"
+( sleep 1 && open "http://localhost:${PORT}" ) &
+exec node tools/serve.mjs "${PORT}"

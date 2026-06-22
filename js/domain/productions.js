@@ -86,7 +86,7 @@ export function buildMaterialUnits(p) {
     // 换场景，或当前单元再加这一镜会超过 15s → 起一个新单元（同场景内继续分段）
     if (!cur || cur.scene !== scene || (cur.shotIndexes.length && cur.dur + d > UNIT_MAX_SEC)) {
       cur = { id: uid(), scene, shotIndexes: [], needsImage: false, mode: "t2v",
-        imagePrompt: "", videoPrompt: "", imageAssetId: null, refAssetId: null, dur: 0, status: "idle" };
+        imagePrompt: "", videoPrompt: "", imageAssetId: null, refAssetId: null, refAssetIds: [], dur: 0, status: "idle" };
       units.push(cur);
     }
     cur.shotIndexes.push(i);
@@ -105,7 +105,7 @@ export function buildMaterialUnits(p) {
     u.sceneParts = sceneTotal[u.scene];
     // 按"首镜索引"匹配旧单元，脚本未变时稳定保留提示词/图（拆分后也对得上）
     const o = old.find(x => (x.shotIndexes || []).includes(u.shotIndexes[0]));
-    if (o) { u.id = o.id; u.imagePrompt = o.imagePrompt || ""; u.videoPrompt = o.videoPrompt || ""; u.imageAssetId = o.imageAssetId || null; u.refAssetId = o.refAssetId || null; if (o.mode) u.mode = o.mode; }
+    if (o) { u.id = o.id; u.imagePrompt = o.imagePrompt || ""; u.videoPrompt = o.videoPrompt || ""; u.imageAssetId = o.imageAssetId || null; u.refAssetId = o.refAssetId || null; u.refAssetIds = (o.refAssetIds && o.refAssetIds.length ? o.refAssetIds : (o.refAssetId ? [o.refAssetId] : [])).slice(0, 4); if (o.mode) u.mode = o.mode; }
   });
   p.artifacts.boards.units = units;
   return units;
@@ -206,11 +206,11 @@ export function statusPill(p) {
   if (p.stage === "delivered") return ["已交付", "delivered"];
   if (p.stageStatus === "failed") return ["失败", "failed"];
   if (p.stageStatus === "running") return [p.stage === "workshop" ? "全自动生成中" : STAGES[p.stage].label + "中", "running"];
-  if (p.stageStatus === "needs_input") return ["等待上传", "input"];
+  if (p.stageStatus === "needs_input") return ["等待上传", "need-input"];
   if (p.stage === "review") {
     if (p.review.state === "approved") return ["审核通过", "approved"];
     if (p.review.state === "submitted") return ["已提交待审", "review"];
-    if (p.review.state === "rejected") return ["已驳回", "input"];
+    if (p.review.state === "rejected") return ["已驳回", "need-input"];
     return ["待提交审核", "pending"];
   }
   return [(STAGES[p.stage] || STAGES.script).label + " · 待处理", "pending"];
