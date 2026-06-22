@@ -38,9 +38,9 @@ function showGate() {
   gate.hidden = false;
   document.body.classList.add("gated");
   const u = $("#lgUser"), p = $("#lgPin");
-  if (u) u.value = "yuxuan"; if (p) p.value = "acg123";
+  if (u) u.value = "admin"; if (p) p.value = "123";
   const hint = $("#lgHint");
-  if (hint) hint.textContent = "演示管理员账号：yuxuan / acg123";
+  if (hint) hint.textContent = "演示管理员账号：admin / 123";
   setTimeout(() => u && u.focus(), 80);
 }
 function applyRoleClasses() {

@@ -53,6 +53,28 @@ export function on(evt, fn) { (listeners[evt] = listeners[evt] || []).push(fn); 
 export function off(evt, fn) { listeners[evt] = (listeners[evt] || []).filter(f => f !== fn); }
 export function emit(evt, payload) { (listeners[evt] || []).forEach(f => { try { f(payload); } catch (e) { console.error("[store]", evt, e); } }); }
 
+const ADMIN_LOGIN = { name: "管理员", username: "admin", pin: "123", role: "admin" };
+
+function ensureAdminLogin() {
+  let changed = false;
+  let admin = state.members.find(m => m.role === "admin" && (m.username === "admin" || m.username === "yuxuan"))
+    || state.members.find(m => m.role === "admin");
+
+  if (!admin) {
+    admin = { id: uid(), createdAt: Date.now(), ...ADMIN_LOGIN };
+    state.members.unshift(admin);
+    changed = true;
+  } else if (admin.username !== ADMIN_LOGIN.username || admin.pin !== ADMIN_LOGIN.pin || admin.name !== ADMIN_LOGIN.name) {
+    Object.assign(admin, ADMIN_LOGIN);
+    changed = true;
+  }
+
+  const before = state.members.length;
+  state.members = state.members.filter(m => m.id === admin.id || !(m.role === "admin" && m.username === ADMIN_LOGIN.username));
+  if (state.members.length !== before) changed = true;
+  return changed;
+}
+
 /* ---- 持久化：标脏集合，防抖落盘 ---- */
 const dirty = new Set();
 const persist = debounce(async () => {
@@ -107,18 +129,20 @@ export async function loadAll() {
   let migrated = false;
   state.members.forEach(m => { if (m.role === "reviewer") { m.role = "editor"; migrated = true; } });
   if (migrated) db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
-  // 账号收敛 v2（一次性）：移除旧演示账号，落地正式账号 yuxuan(管理员) / gongyingshang(供应商)
+  // 账号收敛 v2（一次性）：移除旧演示账号，落地正式账号 admin(管理员) / gongyingshang(供应商)
   if (!(await db.metaGet("acctsV2"))) {
     const DEMO = new Set(["admin:admin888", "reviewer:888888", "editor:666666", "supplier:222222"]);
     state.members = state.members.filter(m => !DEMO.has(m.username + ":" + m.pin));
-    if (!state.members.some(m => m.username === "yuxuan")) state.members.unshift({ id: uid(), name: "羽轩", username: "yuxuan", pin: "acg123", role: "admin", createdAt: Date.now() });
     if (!state.members.some(m => m.username === "gongyingshang")) state.members.push({ id: uid(), name: "供应商", username: "gongyingshang", pin: "gys123", role: "supplier", createdAt: Date.now() });
     db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
     db.metaSet("acctsV2", true);
   }
+  const adminChanged = ensureAdminLogin();
   // 兜底：成员为空也要有一个管理员
   if (!state.members.length) {
-    state.members = [{ id: uid(), name: "羽轩", username: "yuxuan", pin: "acg123", role: "admin", createdAt: Date.now() }];
+    state.members = [{ id: uid(), createdAt: Date.now(), ...ADMIN_LOGIN }];
+    db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
+  } else if (adminChanged) {
     db.metaSet("members", JSON.parse(JSON.stringify(state.members)));
   }
   if (state.ui.assetSeq == null) state.ui.assetSeq = state.assets.filter(a => !a.delivered).length;
